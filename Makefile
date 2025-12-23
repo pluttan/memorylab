@@ -77,7 +77,7 @@ PRETTY_RAW = python3 iu6hardwarememorylab/pretty_print.py
 # Форматирование вывода (fallback)
 LINE = ========================================
 
-.PHONY: all all-continue server jupyter notebook build clean help stop venv deps kill-server kill-port logs report report-setup report-watch report-generate report-compile typst-install clean-report run
+.PHONY: all server jupyter notebook build clean help stop venv deps kill-server kill-port logs report report-setup report-watch report-generate report-compile typst-install clean-report run
 
 # По умолчанию показываем помощь
 help:
@@ -186,18 +186,6 @@ all: report-setup build deps kill-server $(LOG_DIR) $(IMG_DIR)
 	@$(PRETTY) header "Настройка и запуск всех компонентов"
 	@# Интерактивная настройка отчёта (генерация main.typ)
 	@$(PYTHON) -c "from iu6hardwarememorylab import generate_report; generate_report(interactive=True, perform_build=False)"
-	@# Проверяем, была ли папка переименована
-	@if [ -f ".new_project_root" ]; then \
-		NEW_ROOT=$$(cat .new_project_root); \
-		rm -f .new_project_root; \
-		$(PRETTY) info "Папка переименована, перезапускаем make all в $$NEW_ROOT"; \
-		cd "$$NEW_ROOT" && exec $(MAKE) all-continue; \
-	else \
-		$(MAKE) all-continue; \
-	fi
-
-# Продолжение all после возможного переименования
-all-continue:
 	@$(PRETTY) info "Компиляция PDF..."
 	@$(TYPST_BIN) compile $(REPORT_MAIN) $(REPORT_PDF)
 	@# Копируем PDF в корень с именем из конфига

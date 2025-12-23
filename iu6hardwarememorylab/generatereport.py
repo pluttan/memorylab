@@ -679,54 +679,10 @@ def prompt_title_config() -> Dict[str, str]:
     if not adviser_name:
         adviser_name = "А.Ю. Попов"
     
-    # === Логика переименования папки проекта ===
+    # Логика переименования папки отключена (ломает Makefile workflow)
+    # Для переименования папки проекта, клонируйте репозиторий в нужную папку:
+    # git clone https://github.com/pluttan/memorylab.git lab4_Фамилия
     new_project_root = None
-    
-    try:
-        # Извлекаем фамилию (последнее слово, чтобы корректно обработать "А.П. Плютто")
-        parts = author_name.split()
-        surname = parts[-1] if parts else "Unknown"
-        
-        # Простая транслитерация
-        translit_map = {
-            'а': 'a', 'б': 'b', 'в': 'v', 'г': 'g', 'д': 'd', 'е': 'e', 'ё': 'yo',
-            'ж': 'zh', 'з': 'z', 'и': 'i', 'й': 'y', 'к': 'k', 'л': 'l', 'м': 'm',
-            'н': 'n', 'о': 'o', 'п': 'p', 'р': 'r', 'с': 's', 'т': 't', 'у': 'u',
-            'ф': 'f', 'х': 'kh', 'ц': 'ts', 'ч': 'ch', 'ш': 'sh', 'щ': 'shch',
-            'ъ': '', 'ы': 'y', 'ь': '', 'э': 'e', 'ю': 'yu', 'я': 'ya'
-        }
-        
-        transliterated = ""
-        for char in surname.lower():
-            transliterated += translit_map.get(char, char)
-            
-        # Делаем первую букву заглавной
-        if transliterated:
-            transliterated = transliterated.capitalize()
-            
-            new_dir_name = f"lab4_{transliterated}"
-            current_dir = Path.cwd()
-            
-            if current_dir.name != new_dir_name:
-                console.print(Panel.fit(f"Переименование проекта: {current_dir.name} -> {new_dir_name}", border_style="cyan"))
-                
-                new_path = current_dir.parent / new_dir_name
-                if not new_path.exists():
-                    current_dir.rename(new_path)
-                    console.print(f"[green][[+]][/green] Проект переименован: {current_dir.name} -> {new_dir_name}")
-                    # Меняем рабочую директорию процесса
-                    import os
-                    os.chdir(new_path)
-                    new_project_root = new_path
-                    # Записываем новый путь для Makefile
-                    with open(new_path / ".new_project_root", "w") as f:
-                        f.write(str(new_path))
-                else:
-                    console.print(f"[yellow][[!]][/yellow] Папка {new_dir_name} уже существует.")
-                    # Если папка существует, возможно мы хотим использовать её как root?
-                    # Но пока просто предупреждаем.
-    except Exception as e:
-        console.print(f"[yellow][[!]][/yellow] Ошибка переименования: {e}")
 
     console.print(Panel.fit("Конфигурация сохранена!", border_style="green"))
     

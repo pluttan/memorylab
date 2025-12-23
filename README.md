@@ -5,7 +5,11 @@
 ## Быстрый старт
 
 ```bash
-git clone https://github.com/pluttan/memorylab.git && cd memorylab && make all
+# Клонируем в папку с вашей фамилией (транслит)
+folder=lab4_Фамилия
+git clone https://github.com/pluttan/memorylab.git $folder
+cd $folder
+make all
 ```
 
 Эта команда:
