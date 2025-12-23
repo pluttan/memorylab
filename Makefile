@@ -135,20 +135,21 @@ $(SERVER_BIN): $(SERVER_SRC) $(HARDWARE_DIR)/functions.cpp $(HARDWARE_DIR)/teste
 	@$(CXX) $(CXXFLAGS) -o $@ $(SERVER_SRC) $(LDFLAGS)
 	@$(PRETTY_RAW) success "Сервер скомпилирован: $(SERVER_BIN)"
 
-# Убить процесс на порту (надёжный способ)
+# Убить процесс на порту (кросс-платформенно: macOS + Linux)
 kill-port:
-	@PID=$$(lsof -ti:$(SERVER_PORT) 2>/dev/null); \
+	@PID=$$(lsof -ti:$(SERVER_PORT) 2>/dev/null || ss -tlnp 2>/dev/null | grep :$(SERVER_PORT) | sed -n 's/.*pid=\([0-9]*\).*/\1/p' | head -1); \
 	if [ -n "$$PID" ]; then \
 		$(PRETTY_RAW) header "Остановка процесса на порту $(SERVER_PORT)"; \
 		$(PRETTY_RAW) info "PID: $$PID"; \
 		kill -9 $$PID 2>/dev/null || true; \
 		sleep 1; \
 		$(PRETTY_RAW) success "Процесс остановлен"; \
-	fi
+	fi; \
+	true
 
 # Убить сервер если запущен
 kill-server: kill-port
-	@pkill -f "$(SERVER_BIN)" 2>/dev/null || true
+	-@pkill -f "$(SERVER_BIN)" 2>/dev/null || true
 
 # Запустить сервер (с логированием в консоль и файл)
 server: build kill-server $(LOG_DIR)
