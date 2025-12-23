@@ -1,0 +1,51 @@
+# Виртуальное окружение Python
+.venv/
+venv/
+env/
+
+# Логи
+log/
+*.log
+
+# Скомпилированные файлы
+hardware/server
+*.o
+*.a
+
+# Python кэш
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+.Python
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Typst (скачивается при сборке)
+report/typst/
+report/typst-bmstu/
+report/typst-g7.32-2017/
+
+# Сгенерированные файлы отчёта
+report/main.typ
+report/main.pdf
+report/img/
+report/.report_config.json
+report/
+
+# PDF в корне (генерируется)
+Отчет*.pdf
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Временные файлы
+*.tmp
+*.temp
