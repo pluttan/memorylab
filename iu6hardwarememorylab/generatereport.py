@@ -718,6 +718,9 @@ def prompt_title_config() -> Dict[str, str]:
                     import os
                     os.chdir(new_path)
                     new_project_root = new_path
+                    # Записываем новый путь для Makefile
+                    with open(new_path / ".new_project_root", "w") as f:
+                        f.write(str(new_path))
                 else:
                     console.print(f"[yellow][[!]][/yellow] Папка {new_dir_name} уже существует.")
                     # Если папка существует, возможно мы хотим использовать её как root?

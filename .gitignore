@@ -49,3 +49,4 @@ report/
 # Временные файлы
 *.tmp
 *.temp
+.new_project_root
