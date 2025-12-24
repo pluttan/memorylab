@@ -5,7 +5,8 @@
 ## Быстрый старт
 
 ```bash
-# Для компьютеров ка кафедре раскоментируйте:
+# Для компьютеров на кафедре раскоментируйте:
+# sudo apt update
 # sudo apt install -y python-dev python-venv ttf-mscorefonts-installer
 # Клонируем в папку с вашей фамилией (транслит)
 folder=lab4_Фамилия
