@@ -7,7 +7,7 @@
 ```bash
 # Для компьютеров на кафедре раскоментируйте:
 # sudo apt update
-# sudo apt install -y python-dev python-venv ttf-mscorefonts-installer
+# sudo apt install -y python3-dev python3-venv ttf-mscorefonts-installer
 # Клонируем в папку с вашей фамилией (транслит)
 folder=lab4_Фамилия
 git clone https://github.com/pluttan/memorylab.git $folder
