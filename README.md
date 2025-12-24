@@ -5,6 +5,8 @@
 ## Быстрый старт
 
 ```bash
+# Для компьютеров ка кафедре раскоментируйте:
+# sudo apt install -y python-dev python-venv ttf-mscorefonts-installer
 # Клонируем в папку с вашей фамилией (транслит)
 folder=lab4_Фамилия
 git clone https://github.com/pluttan/memorylab.git $folder
@@ -63,10 +65,11 @@ make all
 ## Требования
 
 - macOS / Linux
-- Python 3.9+
+- Python 3.9+, python-venv, python-dev
 - g++ с поддержкой C++17
 - OpenSSL (для WebSocket)
 - Git (для клонирования пакетов Typst)
+- Times New Roman
 
 ## Лицензия
 
