@@ -40,7 +40,17 @@ std::string memoryReadOptimizationExperiment(const std::string& params) {
     }
     memset(optimizedArray, 0, arraySize * maxStreams);
     
-    std::vector<std::tuple<int, double, double>> results;
+    // PMU счётчики
+    PerfCounters perfCounters;
+    PmuMetrics separatePmu, optimizedPmu;
+    
+    struct DataPoint {
+        int streams;
+        double separate_time_us;
+        double optimized_time_us;
+    };
+    std::vector<DataPoint> results;
+    
     setCancelExperiment(false);
     prepareForMeasurement();
     
@@ -58,6 +68,10 @@ std::string memoryReadOptimizationExperiment(const std::string& params) {
         }
         
         // Несколько отдельных массивов
+        if (perfCounters.isAvailable()) {
+            perfCounters.start();
+        }
+        
         auto start1 = std::chrono::high_resolution_clock::now();
         volatile int x1 = 0;
         for (size_t a = 0; a < arraySize; a += sizeof(int)) {
@@ -68,7 +82,16 @@ std::string memoryReadOptimizationExperiment(const std::string& params) {
         auto end1 = std::chrono::high_resolution_clock::now();
         double separateTime = std::chrono::duration_cast<std::chrono::nanoseconds>(end1 - start1).count() / 1000.0;
         
+        if (perfCounters.isAvailable()) {
+            perfCounters.stop();
+            separatePmu += perfCounters.read();
+        }
+        
         // Один оптимизированный массив
+        if (perfCounters.isAvailable()) {
+            perfCounters.start();
+        }
+        
         auto start2 = std::chrono::high_resolution_clock::now();
         volatile int x2 = 0;
         for (size_t a = 0; a < arraySize * streams; a += sizeof(int) * streams) {
@@ -79,6 +102,11 @@ std::string memoryReadOptimizationExperiment(const std::string& params) {
         auto end2 = std::chrono::high_resolution_clock::now();
         double optimizedTime = std::chrono::duration_cast<std::chrono::nanoseconds>(end2 - start2).count() / 1000.0;
         
+        if (perfCounters.isAvailable()) {
+            perfCounters.stop();
+            optimizedPmu += perfCounters.read();
+        }
+        
         results.push_back({streams, separateTime, optimizedTime});
     }
     
@@ -88,8 +116,8 @@ std::string memoryReadOptimizationExperiment(const std::string& params) {
     // Расчёт выводов
     double totalSeparateTime = 0, totalOptimizedTime = 0;
     for (size_t i = 0; i < results.size(); i++) {
-        totalSeparateTime += std::get<1>(results[i]);
-        totalOptimizedTime += std::get<2>(results[i]);
+        totalSeparateTime += results[i].separate_time_us;
+        totalOptimizedTime += results[i].optimized_time_us;
     }
     double separateToOptimizedRatio = (totalOptimizedTime > 0) ? totalSeparateTime / totalOptimizedTime : 0;
     
@@ -109,11 +137,17 @@ std::string memoryReadOptimizationExperiment(const std::string& params) {
     json << "\"dataPoints\":[";
     for (size_t i = 0; i < results.size(); i++) {
         if (i > 0) json << ",";
-        json << "{\"streams\":" << std::get<0>(results[i]) 
-             << ",\"separate_time_us\":" << std::get<1>(results[i])
-             << ",\"optimized_time_us\":" << std::get<2>(results[i]) << "}";
+        json << "{\"streams\":" << results[i].streams 
+             << ",\"separate_time_us\":" << results[i].separate_time_us
+             << ",\"optimized_time_us\":" << results[i].optimized_time_us << "}";
     }
-    json << "]}";
+    json << "],";
+    // Итоговые PMU метрики
+    json << "\"pmu_summary\":{";
+    json << "\"separate\":" << separatePmu.toJson() << ",";
+    json << "\"optimized\":" << optimizedPmu.toJson();
+    json << "}}";
     
     return json.str();
 }
+

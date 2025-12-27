@@ -51,8 +51,15 @@ std::string memoryStratificationExperiment(const std::string& params) {
     // Инициализация массива для предотвращения ленивого выделения страниц
     memset(p, 0, arraySize);
     
-    // Структура для хранения результатов
-    std::vector<std::pair<size_t, double>> results;
+    // Структура для хранения результатов с PMU метриками
+    struct DataPoint {
+        size_t step;
+        double time_us;
+        PmuMetrics pmu;
+    };
+    std::vector<DataPoint> results;
+    PmuMetrics totalPmu; // Суммарные метрики
+    PerfCounters perfCounters;
     
     // Количество повторений для каждого измерения (берём минимум для исключения влияния ОС)
     const int NUM_ITERATIONS = 3;
@@ -119,7 +126,21 @@ std::string memoryStratificationExperiment(const std::string& params) {
         // Находим минимальное время среди всех потоков
         double minTimeUs = *std::min_element(threadTimes.begin(), threadTimes.end());
         
-        results.push_back({pg_size, minTimeUs});
+        // Сбираем PMU метрики для этой точки
+        PmuMetrics pointPmu;
+        if (perfCounters.isAvailable()) {
+            volatile int dummy = 0;
+            pointPmu = perfCounters.measure([&]() {
+                for (size_t b = 0; b < pg_size; b += stepSize) {
+                    for (size_t a = b; a + sizeof(int) <= arraySize; a += pg_size) {
+                        dummy += p[a / sizeof(int)];
+                    }
+                }
+            });
+            totalPmu += pointPmu;
+        }
+        
+        results.push_back({pg_size, minTimeUs, pointPmu});
         
         stepCount++;
         if (stepCount % 10 == 0 || stepCount == totalSteps) {
@@ -143,18 +164,18 @@ std::string memoryStratificationExperiment(const std::string& params) {
     
     for (size_t i = 1; i < results.size() - 1; i++) {
         // Поиск глобального максимума
-        if (results[i].second > maxTime) {
-            maxTime = results[i].second;
-            maxTimeStep = results[i].first;
+        if (results[i].time_us > maxTime) {
+            maxTime = results[i].time_us;
+            maxTimeStep = results[i].step;
         }
         
         // Поиск первого локального максимума (T1)
         if (!foundFirstMax && 
-            results[i].second > results[i-1].second && 
-            results[i].second > results[i+1].second &&
-            results[i].first >= static_cast<size_t>(cacheLine)) {
-            firstLocalMax = results[i].second;
-            firstLocalMaxStep = results[i].first;
+            results[i].time_us > results[i-1].time_us && 
+            results[i].time_us > results[i+1].time_us &&
+            results[i].step >= static_cast<size_t>(cacheLine)) {
+            firstLocalMax = results[i].time_us;
+            firstLocalMaxStep = results[i].step;
             foundFirstMax = true;
         }
     }
@@ -200,9 +221,17 @@ std::string memoryStratificationExperiment(const std::string& params) {
     json << "\"dataPoints\":[";
     for (size_t i = 0; i < results.size(); i++) {
         if (i > 0) json << ",";
-        json << "{\"step\":" << results[i].first << ",\"time_us\":" << results[i].second << "}";
+        json << "{\"step\":" << results[i].step << ",\"time_us\":" << results[i].time_us;
+        // PMU метрики для графика (реальное время)
+        json << ",\"cache_misses\":" << results[i].pmu.cache_misses;
+        json << ",\"branch_misses\":" << results[i].pmu.branch_misses;
+        json << ",\"dtlb_load_misses\":" << results[i].pmu.dtlb_load_misses;
+        json << "}";
     }
-    json << "]";
+    json << "],";
+    
+    // Итоговые PMU метрики
+    json << "\"pmu_summary\":" << totalPmu.toJson();
     
     json << "}";
     

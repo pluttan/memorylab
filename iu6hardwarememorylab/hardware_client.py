@@ -94,7 +94,7 @@ class HardwareTesterClient:
                 f.write("РЕЗУЛЬТАТЫ ЭКСПЕРИМЕНТОВ\n")
                 f.write("=" * 70 + "\n\n")
     
-    def _save_results(self, experiment_name: str, params: Dict[str, Any], conclusions: Dict[str, Any]):
+    def _save_results(self, experiment_name: str, params: Dict[str, Any], conclusions: Dict[str, Any], pmu_summary: Dict[str, Any] = None):
         """
         Сохраняет результаты эксперимента в файл.
         
@@ -102,6 +102,7 @@ class HardwareTesterClient:
             experiment_name: Название эксперимента
             params: Параметры эксперимента
             conclusions: Выводы эксперимента
+            pmu_summary: PMU метрики (опционально)
         """
         if not self.results_file:
             return
@@ -118,6 +119,33 @@ class HardwareTesterClient:
                     f.write(f"  {key}: {value:.4f}\n")
                 else:
                     f.write(f"  {key}: {value}\n")
+            
+            # Добавляем PMU метрики если есть
+            if pmu_summary:
+                f.write("\nPMU метрики:\n")
+                # Проверяем формат: плоский (exp1) или вложенный (exp2+)
+                first_value = next(iter(pmu_summary.values()), None)
+                if isinstance(first_value, dict):
+                    # Вложенный формат (несколько категорий)
+                    for category, metrics in pmu_summary.items():
+                        f.write(f"  {category}:\n")
+                        for key, value in metrics.items():
+                            if isinstance(value, float):
+                                f.write(f"    {key}: {value:.4f}\n")
+                            elif isinstance(value, int) and value > 1000000:
+                                f.write(f"    {key}: {value:,}\n")
+                            else:
+                                f.write(f"    {key}: {value}\n")
+                else:
+                    # Плоский формат (одна категория)
+                    for key, value in pmu_summary.items():
+                        if isinstance(value, float):
+                            f.write(f"  {key}: {value:.4f}\n")
+                        elif isinstance(value, int) and value > 1000000:
+                            f.write(f"  {key}: {value:,}\n")
+                        else:
+                            f.write(f"  {key}: {value}\n")
+            
             f.write("\n" + "=" * 70 + "\n\n")
     
 
@@ -443,7 +471,6 @@ class HardwareTesterClient:
         console.print(f"[cyan][[*]][/cyan] Выполнение функции [bold]'{function_name}'[/bold]...")
         result = await self._send_command(command)
         console.print(f"[green][[+]][/green] Функция выполнена")
-        
         return result
     
     async def cancel(self) -> Dict[str, Any]:
@@ -497,7 +524,70 @@ class HardwareTesterClient:
                 # Выходим, соединение остаётся открытым
                 raise
     
+    # ==================== PMU МЕТРИКИ ====================
+    
+    def _print_pmu_summary(self, data: Dict[str, Any], experiment_name: str = ""):
+        """
+        Выводит итоговые PMU метрики в консоль в формате таблицы.
+        
+        Args:
+            data: Результат выполнения эксперимента с pmu_summary
+            experiment_name: Название эксперимента для заголовка
+        """
+        pmu_summary = data.get("pmu_summary", {})
+        if not pmu_summary:
+            return
+        
+        # Определяем структуру PMU данных
+        # Может быть одиночный объект или вложенные объекты (для сравнительных экспериментов)
+        if "instructions" in pmu_summary:
+            # Одиночный pmu_summary
+            pmu_items = {"Всего": pmu_summary}
+        else:
+            # Несколько категорий (list/array, conflict/no_conflict и т.д.)
+            pmu_items = pmu_summary
+        
+        # Создаём таблицу
+        table = Table(title=f"PMU Метрики: {experiment_name}" if experiment_name else "PMU Метрики",
+                     box=box.ROUNDED, show_header=True, header_style="bold cyan")
+        
+        table.add_column("Метрика", style="bold")
+        for name in pmu_items.keys():
+            table.add_column(name.replace("_", " ").title(), justify="right")
+        
+        # Метрики для отображения
+        metric_labels = [
+            ("instructions", "Инструкции"),
+            ("cycles", "Циклы"),
+            ("ipc", "IPC"),
+            ("cache_misses", "Промахи кэша"),
+            ("branch_misses", "Промахи ветвлений"),
+            ("cache_references", "Обращения к кэшу"),
+            ("branches", "Ветвления"),
+            ("dtlb_load_misses", "Промахи dTLB"),
+        ]
+        
+        for metric_key, metric_name in metric_labels:
+            values = []
+            has_value = False
+            for name, pmu in pmu_items.items():
+                val = pmu.get(metric_key, 0)
+                if val != 0:
+                    has_value = True
+                if metric_key == "ipc":
+                    values.append(f"{val:.4f}")
+                elif isinstance(val, int) and val > 1000000:
+                    values.append(f"{val:,}".replace(",", " "))
+                else:
+                    values.append(str(val))
+            
+            if has_value:
+                table.add_row(metric_name, *values)
+        
+        console.print(table)
+    
     # ==================== ВИЗУАЛИЗАЦИЯ ====================
+
     
     def plot_memory_stratification(self, data: Dict[str, Any], 
                                     save_path: Optional[str] = None,
@@ -546,11 +636,15 @@ class HardwareTesterClient:
             
             console.print(Panel(conclusions, title="ВЫВОДЫ ЭКСПЕРИМЕНТА 1: Исследование расслоения динамической памяти", border_style="green"))
         
+        # Выводим PMU метрики
+        self._print_pmu_summary(data, "Эксперимент 1")
+        
         # Сохраняем результаты в файл
         self._save_results(
             "Эксперимент 1: Исследование расслоения динамической памяти",
             params,
-            {**analysis} if analysis else {}
+            {**analysis} if analysis else {},
+            data.get("pmu_summary")
         )
         
         steps = [p["step"] for p in data_points]
@@ -597,9 +691,19 @@ class HardwareTesterClient:
         if show:
             plt.show()
             plt.close(fig)
-            return None
         
-        return fig
+        # Автоматически строим график PMU метрик
+        self.plot_pmu_metrics(
+            data,
+            x_key="step",
+            x_label="Шаг",
+            metrics=["cache_misses", "branch_misses"],
+            title="PMU: Расслоение памяти",
+            save_path=self._get_save_path("exp1_pmu_metrics") if self.img_dir else None,
+            show=show
+        )
+        
+        return fig if not show else None
     
     def plot_generic(self, data: Dict[str, Any],
                      x_key: str = "step",
@@ -668,12 +772,16 @@ class HardwareTesterClient:
             
             console.print(Panel(tbl, title="ВЫВОДЫ ЭКСПЕРИМЕНТА 2: Сравнение ссылочных и векторных структур", border_style="green"))
         
+        # Выводим PMU метрики
+        self._print_pmu_summary(data, "Эксперимент 2")
+        
         # Сохраняем результаты в файл
         params_exp = data.get("parameters", {})
         self._save_results(
             "Эксперимент 2: Сравнение ссылочных и векторных структур",
             params_exp,
-            conclusions if conclusions else {}
+            conclusions if conclusions else {},
+            data.get("pmu_summary")
         )
         
         frags = [p["fragmentation"] / 1024 for p in data_points]
@@ -710,7 +818,111 @@ class HardwareTesterClient:
         if show:
             plt.show()
             plt.close(fig)
+        
+        # Автоматически строим график PMU метрик
+        self.plot_pmu_metrics(
+            data,
+            x_key="fragmentation",
+            x_label="Фрагментация",
+            metrics=["cache_misses", "branch_misses"],
+            title="PMU: Сравнение List vs Array",
+            save_path=self._get_save_path("exp2_pmu_metrics") if self.img_dir else None,
+            show=show
+        )
+        
+        return fig if not show else None
+
+    def plot_pmu_metrics(self, data: Dict[str, Any],
+                         x_key: str = "step",
+                         x_label: str = "X",
+                         metrics: List[str] = None,
+                         title: str = "PMU Метрики",
+                         save_path: Optional[str] = None,
+                         show: bool = True) -> plt.Figure:
+        """
+        Строит графики PMU метрик по данным эксперимента.
+        
+        Args:
+            data: Результат выполнения эксперимента
+            x_key: Ключ для оси X (step, fragmentation, offset и т.д.)
+            x_label: Подпись оси X
+            metrics: Список метрик для отображения. По умолчанию: cache_misses, branch_misses
+            title: Заголовок графика
+            save_path: Путь для сохранения
+            show: Показать график
+        """
+        data_points = data.get("dataPoints", [])
+        if not data_points:
+            console.print("[red][[-]][/red] Нет данных для построения графика PMU")
             return None
+        
+        # Метрики по умолчанию
+        if metrics is None:
+            metrics = ["cache_misses", "branch_misses"]
+        
+        # Проверяем наличие данных PMU
+        available_metrics = [m for m in metrics if m in data_points[0]]
+        if not available_metrics:
+            # Молча пропускаем если PMU данных нет per-point
+            return None
+        
+        x_values = [p.get(x_key, i) for i, p in enumerate(data_points)]
+        
+        # Определяем масштаб X
+        x_scale = 1
+        x_suffix = ""
+        if x_key == "fragmentation" and x_values and x_values[-1] > 1000:
+            x_scale = 1024
+            x_suffix = " (КБ)"
+        elif x_key == "step" and x_values and x_values[-1] > 1000:
+            x_scale = 1024
+            x_suffix = " (КБ)"
+        
+        x_scaled = [x / x_scale for x in x_values]
+        
+        # Цвета для разных метрик
+        colors = ['#e74c3c', '#3498db', '#2ecc71', '#9b59b6', '#f39c12', '#1abc9c', '#e67e22', '#34495e']
+        metric_labels = {
+            "cache_misses": "Промахи кэша",
+            "branch_misses": "Промахи ветвлений",
+            "dtlb_misses": "Промахи dTLB",
+            "stalled_backend": "Stall Backend",
+            "instructions": "Инструкции",
+            "cycles": "Циклы",
+        }
+        
+        fig, axes = plt.subplots(len(available_metrics), 1, figsize=(12, 3 * len(available_metrics)), 
+                                  facecolor='white', squeeze=False)
+        
+        for idx, metric in enumerate(available_metrics):
+            ax = axes[idx, 0]
+            y_values = [p.get(metric, 0) for p in data_points]
+            
+            color = colors[idx % len(colors)]
+            label = metric_labels.get(metric, metric)
+            
+            ax.plot(x_scaled, y_values, color=color, linewidth=1.5, label=label)
+            ax.fill_between(x_scaled, y_values, alpha=0.3, color=color)
+            ax.set_xlabel(f'{x_label}{x_suffix}', fontsize=10)
+            ax.set_ylabel(label, fontsize=10)
+            ax.grid(True, linestyle='--', alpha=0.5)
+            ax.legend(loc='upper right')
+            
+            # Форматирование больших чисел
+            ax.ticklabel_format(axis='y', style='scientific', scilimits=(6, 6))
+        
+        fig.suptitle(title, fontsize=14, fontweight='bold')
+        plt.tight_layout()
+        
+        if save_path:
+            fig.savefig(save_path, dpi=150, bbox_inches='tight')
+            console.print(f"[green][[+]][/green] График PMU сохранён: {save_path}")
+        
+        if show:
+            plt.show()
+            plt.close(fig)
+            return None
+        
         return fig
 
     def plot_prefetch(self, data: Dict[str, Any],
@@ -759,12 +971,16 @@ class HardwareTesterClient:
             
             console.print(Panel(tbl, title="ВЫВОДЫ ЭКСПЕРИМЕНТА 3: Эффективность программной предвыборки", border_style="green"))
         
+        # Выводим PMU метрики
+        self._print_pmu_summary(data, "Эксперимент 3")
+        
         # Сохраняем результаты в файл
         params_exp = data.get("parameters", {})
         self._save_results(
             "Эксперимент 3: Эффективность программной предвыборки",
             params_exp,
-            conclusions if conclusions else {}
+            conclusions if conclusions else {},
+            data.get("pmu_summary")
         )
         
         offsets = [p.get("offset", 0) for p in data_points]  # Показываем в байтах
@@ -839,8 +1055,19 @@ class HardwareTesterClient:
         if show:
             plt.show()
             plt.close(fig)
-            return None
-        return fig
+        
+        # Автоматически строим график PMU метрик
+        self.plot_pmu_metrics(
+            data,
+            x_key="offset",
+            x_label="Смещение",
+            metrics=["cache_misses", "branch_misses"],
+            title="PMU: Предвыборка",
+            save_path=self._get_save_path("exp3_pmu_metrics") if self.img_dir else None,
+            show=show
+        )
+        
+        return fig if not show else None
 
     def plot_memory_read_optimization(self, data: Dict[str, Any],
                                        save_path: Optional[str] = None,
@@ -869,12 +1096,16 @@ class HardwareTesterClient:
             
             console.print(Panel(tbl, title="ВЫВОДЫ ЭКСПЕРИМЕНТА 4: Оптимизация чтения оперативной памяти", border_style="green"))
         
+        # Выводим PMU метрики
+        self._print_pmu_summary(data, "Эксперимент 4")
+        
         # Сохраняем результаты в файл
         params_exp = data.get("parameters", {})
         self._save_results(
             "Эксперимент 4: Оптимизация чтения оперативной памяти",
             params_exp,
-            conclusions if conclusions else {}
+            conclusions if conclusions else {},
+            data.get("pmu_summary")
         )
         
         streams = [p["streams"] for p in data_points]
@@ -910,8 +1141,19 @@ class HardwareTesterClient:
         if show:
             plt.show()
             plt.close(fig)
-            return None
-        return fig
+        
+        # Автоматически строим график PMU метрик
+        self.plot_pmu_metrics(
+            data,
+            x_key="iteration",
+            x_label="Итерация",
+            metrics=["cache_misses", "branch_misses"],
+            title="PMU: Оптимизация чтения памяти",
+            save_path=self._get_save_path("exp4_pmu_metrics") if self.img_dir else None,
+            show=show
+        )
+        
+        return fig if not show else None
 
     def plot_cache_conflicts(self, data: Dict[str, Any],
                              save_path: Optional[str] = None,
@@ -940,12 +1182,16 @@ class HardwareTesterClient:
             
             console.print(Panel(tbl, title="ВЫВОДЫ ЭКСПЕРИМЕНТА 5: Конфликты в кэш-памяти", border_style="green"))
         
+        # Выводим PMU метрики
+        self._print_pmu_summary(data, "Эксперимент 5")
+        
         # Сохраняем результаты в файл
         params_exp = data.get("parameters", {})
         self._save_results(
             "Эксперимент 5: Конфликты в кэш-памяти",
             params_exp,
-            conclusions if conclusions else {}
+            conclusions if conclusions else {},
+            data.get("pmu_summary")
         )
         
         lines = [p["line"] for p in data_points]
@@ -982,8 +1228,19 @@ class HardwareTesterClient:
         if show:
             plt.show()
             plt.close(fig)
-            return None
-        return fig
+        
+        # Автоматически строим график PMU метрик
+        self.plot_pmu_metrics(
+            data,
+            x_key="stride",
+            x_label="Шаг доступа",
+            metrics=["cache_misses", "branch_misses"],
+            title="PMU: Конфликты кэша",
+            save_path=self._get_save_path("exp5_pmu_metrics") if self.img_dir else None,
+            show=show
+        )
+        
+        return fig if not show else None
 
     def plot_sorting_algorithms(self, data: Dict[str, Any],
                                 save_path: Optional[str] = None,
@@ -1015,12 +1272,16 @@ class HardwareTesterClient:
             
             console.print(Panel(tbl, title="ВЫВОДЫ ЭКСПЕРИМЕНТА 6: Сравнение алгоритмов сортировки", border_style="green"))
         
+        # Выводим PMU метрики
+        self._print_pmu_summary(data, "Эксперимент 6")
+        
         # Сохраняем результаты в файл
         params_exp = data.get("parameters", {})
         self._save_results(
             "Эксперимент 6: Сравнение алгоритмов сортировки",
             params_exp,
-            conclusions if conclusions else {}
+            conclusions if conclusions else {},
+            data.get("pmu_summary")
         )
         
         elements = [p["elements"] / (1024 * 1024) for p in data_points]
@@ -1058,7 +1319,137 @@ class HardwareTesterClient:
         if show:
             plt.show()
             plt.close(fig)
+        
+        # Автоматически строим график PMU метрик
+        self.plot_pmu_metrics(
+            data,
+            x_key="size",
+            x_label="Размер массива",
+            metrics=["cache_misses", "branch_misses"],
+            title="PMU: Сортировка",
+            save_path=self._get_save_path("exp6_pmu_metrics") if self.img_dir else None,
+            show=show
+        )
+        
+        return fig if not show else None
+
+    def plot_self_modifying_code(self, data: Dict[str, Any],
+                                  save_path: Optional[str] = None,
+                                  show: bool = True) -> plt.Figure:
+        """
+        Отображает результаты DOOM JIT бенчмарка:
+        Сравнение JIT (зелёный) vs Branching (красный) режимов рендеринга.
+        
+        Args:
+            data: Результат выполнения функции self_modifying_code (DOOM benchmark)
+            save_path: Путь для сохранения графика (опционально)
+            show: Показать график на экране
+            
+        Returns:
+            Объект Figure matplotlib
+        """
+        if "error" in data:
+            console.print(f"[red][[-]][/red] Ошибка в данных: {data['error']}")
             return None
+            
+        # DEBUG: Print received keys
+        console.print(f"[bold magenta]DEBUG: Received metrics keys: {list(data.keys())}[/bold magenta]")
+        if "jit" in data:
+            console.print(f"[bold magenta]DEBUG: jit data: {data['jit']}[/bold magenta]")
+        if "branching" in data:
+            console.print(f"[bold magenta]DEBUG: branching data: {data['branching']}[/bold magenta]")
+        
+        # Извлекаем данные
+        jit_data = data.get("jit", {})
+        branch_data = data.get("branching", {})
+        raw_data = data.get("raw_data", {})
+        speedup = data.get("speedup", 0)
+        total_entries = data.get("total_entries", 0)
+        
+        jit_frames = raw_data.get("jit_frames", [])
+        branch_frames = raw_data.get("branch_frames", [])
+        
+        # ===== Вывод статистики в консоль =====
+        console.print(Panel(
+            "[bold]DOOM JIT Benchmark: Сравнение рендеринга[/bold]\n\n"
+            "JIT режим: colormap кешируется в регистр (имитация впечатанного адреса)\n"
+            "Branching режим: volatile указатель (принудительная загрузка из памяти)",
+            title="ЭКСПЕРИМЕНТ 7: Самомодифицирующийся код в DOOM",
+            border_style="green"
+        ))
+        
+        # Таблица сравнения
+        cmp_table = Table(title="Результаты бенчмарка", box=box.ROUNDED, show_header=True)
+        cmp_table.add_column("Метрика", style="cyan", justify="left")
+        cmp_table.add_column("JIT", style="green", justify="right")
+        cmp_table.add_column("Branching", style="red", justify="right")
+        
+        cmp_table.add_row("Кадров", str(jit_data.get("frames", 0)), str(branch_data.get("frames", 0)))
+        cmp_table.add_row("Общее время (мс)", f"{jit_data.get('total_time_ms', 0):.2f}", 
+                         f"{branch_data.get('total_time_ms', 0):.2f}")
+        cmp_table.add_row("Среднее на кадр (мс)", f"{jit_data.get('avg_frame_time_ms', 0):.4f}", 
+                         f"{branch_data.get('avg_frame_time_ms', 0):.4f}")
+        cmp_table.add_row("Вызовов R_DrawColumn", str(jit_data.get("total_draw_calls", 0)), 
+                         str(branch_data.get("total_draw_calls", 0)))
+        
+        console.print(cmp_table)
+        console.print()
+        
+        # Ускорение
+        if speedup > 1:
+            console.print(f"[bold green]>>> УСКОРЕНИЕ: {speedup:.2f}x <<<[/bold green]")
+        elif speedup > 0:
+            console.print(f"[bold yellow]>>> Разница: {speedup:.2f}x (JIT медленнее) <<<[/bold yellow]")
+        console.print()
+        
+        # Сохраняем результаты
+        conclusions = {
+            "speedup": f"{speedup:.2f}x",
+            "jit_avg_ms": f"{jit_data.get('avg_frame_time_ms', 0):.4f}",
+            "branch_avg_ms": f"{branch_data.get('avg_frame_time_ms', 0):.4f}",
+            "total_frames": total_entries
+        }
+        
+        self._save_results(
+            "Эксперимент 7: DOOM JIT Benchmark",
+            {"source": "jit_benchmark.csv", "total_entries": total_entries},
+            conclusions
+        )
+        
+        # ===== График =====
+        if not jit_frames and not branch_frames:
+            console.print("[yellow][[!]][/yellow] Нет сырых данных для графика")
+            return None
+        
+        fig, ax = plt.subplots(figsize=(12, 6), facecolor='white')
+        
+        # График: Время кадра (линии)
+        if jit_frames:
+            ax.plot(range(len(jit_frames)), jit_frames, 
+                    color='#27ae60', alpha=0.7, linewidth=0.8, label='JIT')
+        if branch_frames:
+            ax.plot(range(len(branch_frames)), branch_frames, 
+                    color='#e74c3c', alpha=0.7, linewidth=0.8, label='Branching')
+        
+        ax.set_xlabel('Номер кадра', fontsize=11)
+        ax.set_ylabel('Время кадра (мс)', fontsize=11)
+        ax.set_title('Время рендеринга по кадрам', fontsize=12, fontweight='bold')
+        ax.legend(loc='upper right')
+        ax.grid(True, linestyle='--', alpha=0.5)
+        
+        plt.tight_layout()
+        
+        actual_save_path = self._get_save_path("exp7_doom_jit_benchmark", save_path)
+        if actual_save_path:
+            fig.savefig(actual_save_path, dpi=150, bbox_inches='tight')
+            console.print(f"[green][[+]][/green] График сохранён: {actual_save_path}")
+        
+        if show:
+            plt.show()
+            plt.close(fig)
+            return None
+        return fig
+
         return fig
 
 
@@ -1092,6 +1483,8 @@ async def run_experiment(function_name: str,
         
         if plot and function_name == "memory_stratification":
             client.plot_memory_stratification(result, save_path=save_path)
+        elif plot and function_name == "self_modifying_code":
+            client.plot_self_modifying_code(result, save_path=save_path)
         elif plot:
             client.plot_generic(result, save_path=save_path)
         
@@ -1099,3 +1492,276 @@ async def run_experiment(function_name: str,
         
     finally:
         await client.disconnect()
+
+
+# ==================== MCU CLIENT ====================
+
+class MCUClient(HardwareTesterClient):
+    """
+    Клиент для подключения к микроконтроллеру через UART-WebSocket сервер.
+    
+    Отличия от HardwareTesterClient:
+    - Использует другой порт по умолчанию (8766 для МК, 8765 для desktop)
+    - Добавляет приписку "(МК)" к заголовкам графиков
+    - Сохраняет графики с суффиксом _mcu
+    
+    Пример использования:
+    
+    >>> # Одновременная работа с desktop и MCU серверами
+    >>> desktop_client = HardwareTesterClient(port=8765)
+    >>> mcu_client = MCUClient(port=8766)
+    >>> 
+    >>> await desktop_client.connect()
+    >>> await mcu_client.connect()
+    >>> 
+    >>> desktop_result = await desktop_client.execute("memory_stratification", params)
+    >>> mcu_result = await mcu_client.execute("memory_stratification", params)
+    >>> 
+    >>> desktop_client.plot_memory_stratification(desktop_result)
+    >>> mcu_client.plot_memory_stratification(mcu_result)  # Заголовок будет с "(МК)"
+    """
+    
+    DEFAULT_MCU_PORT = 8766  # Другой порт для МК
+    SERVER_NAME = "HardwareTester-MCU"
+    
+    def __init__(self, host: Optional[str] = None, port: int = DEFAULT_MCU_PORT, 
+                 img_dir: Optional[str] = None, results_file: Optional[str] = None):
+        """
+        Инициализация клиента для МК.
+        
+        Args:
+            host: Адрес UART-сервера (по умолчанию localhost)
+            port: Порт сервера (по умолчанию 8766)
+            img_dir: Папка для сохранения графиков
+            results_file: Путь к файлу для сохранения результатов
+        """
+        # По умолчанию подключаемся к localhost т.к. UART-сервер локальный
+        if host is None:
+            host = "127.0.0.1"
+        super().__init__(host=host, port=port, img_dir=img_dir, results_file=results_file)
+        self._mcu_suffix = " (МК)"
+        self._file_suffix = "_mcu"
+    
+    def _get_save_path(self, name: str, save_path: Optional[str] = None) -> Optional[str]:
+        """Добавляет суффикс _mcu к имени файла."""
+        if save_path:
+            # Вставляем суффикс перед расширением
+            base, ext = os.path.splitext(save_path)
+            return f"{base}{self._file_suffix}{ext}"
+        if self.img_dir:
+            return os.path.join(self.img_dir, f"{name}{self._file_suffix}.png")
+        return None
+    
+    def _add_mcu_suffix(self, title: str) -> str:
+        """Добавляет приписку (МК) к заголовку."""
+        if not title.endswith(self._mcu_suffix):
+            return title + self._mcu_suffix
+        return title
+    
+    def plot_memory_stratification(self, data: Dict[str, Any], 
+                                    save_path: Optional[str] = None,
+                                    show: bool = True,
+                                    smooth: bool = False,
+                                    smooth_window: int = 5) -> plt.Figure:
+        """Строит график с приписком (МК)."""
+        if "error" in data:
+            console.print(f"[red][[-]][/red] Ошибка в данных: {data['error']}")
+            return None
+        
+        data_points = data.get("dataPoints", [])
+        analysis = data.get("analysis", {})
+        params = data.get("parameters", {})
+        
+        if not data_points:
+            console.print("[red][[-]][/red] Нет данных для построения графика")
+            return None
+        
+        steps = [p["step"] if "step" in p else p.get("size_kb", 0) * 1024 for p in data_points]
+        times = [p["time_us"] if "time_us" in p else p.get("time_ns", 0) / 1000 for p in data_points]
+        steps_kb = [s / 1024 if s > 100 else s for s in steps]
+        
+        fig, ax = plt.subplots(figsize=(12, 7), facecolor='white')
+        ax.plot(steps_kb, times, 'b-', linewidth=1.5, label='Время доступа')
+        
+        ax.set_xlabel('Размер (КБ)', fontsize=12)
+        ax.set_ylabel('Время (мкс)', fontsize=12)
+        ax.set_title(self._add_mcu_suffix('Исследование расслоения динамической памяти'), 
+                    fontsize=14, fontweight='bold')
+        ax.grid(True, linestyle='--', alpha=0.7)
+        
+        plt.tight_layout()
+        
+        actual_save_path = self._get_save_path("exp1_memory_stratification", save_path)
+        if actual_save_path:
+            fig.savefig(actual_save_path, dpi=150, bbox_inches='tight')
+            console.print(f"[green][[+]][/green] График сохранён: {actual_save_path}")
+        
+        if show:
+            plt.show()
+            plt.close(fig)
+        
+        return fig if not show else None
+    
+    def plot_list_vs_array(self, data: Dict[str, Any],
+                           save_path: Optional[str] = None,
+                           show: bool = True) -> plt.Figure:
+        """Строит график с приписком (МК)."""
+        if "error" in data:
+            console.print(f"[red][[-]][/red] Ошибка в данных: {data['error']}")
+            return None
+        
+        # Для MCU данные могут быть в другом формате
+        elements = data.get("elements", 0)
+        array_time = data.get("array_time_us", 0)
+        list_time = data.get("list_time_us", 0)
+        ratio = data.get("list_to_array_ratio", list_time / array_time if array_time else 0)
+        
+        # Выводим результаты
+        tbl = Table(show_header=False, box=box.SIMPLE, padding=(0, 1))
+        tbl.add_column("Key", style="bold")
+        tbl.add_column("Value")
+        tbl.add_row("Элементов", str(elements))
+        tbl.add_row("Время работы со списком", f"{list_time:.2f} мкс")
+        tbl.add_row("Время работы с массивом", f"{array_time:.2f} мкс")
+        tbl.add_row("Отношение (список/массив)", f"{ratio:.2f}x")
+        
+        console.print(Panel(tbl, title=self._add_mcu_suffix("ВЫВОДЫ: Сравнение списка и массива"), border_style="green"))
+        
+        # Простой bar chart для MCU
+        fig, ax = plt.subplots(figsize=(10, 6), facecolor='white')
+        bars = ax.bar(['Массив', 'Список'], [array_time, list_time], 
+                     color=['#2ecc71', '#e74c3c'], width=0.6)
+        
+        ax.set_ylabel('Время (мкс)', fontsize=12)
+        ax.set_title(self._add_mcu_suffix('Сравнение списка и массива'), 
+                    fontsize=14, fontweight='bold')
+        ax.grid(True, linestyle='--', alpha=0.7, axis='y')
+        
+        # Добавляем значения на столбцах
+        for bar, val in zip(bars, [array_time, list_time]):
+            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.5,
+                   f'{val:.2f}', ha='center', va='bottom', fontsize=10)
+        
+        plt.tight_layout()
+        
+        actual_save_path = self._get_save_path("exp2_list_vs_array", save_path)
+        if actual_save_path:
+            fig.savefig(actual_save_path, dpi=150, bbox_inches='tight')
+            console.print(f"[green][[+]][/green] График сохранён: {actual_save_path}")
+        
+        if show:
+            plt.show()
+            plt.close(fig)
+        
+        return fig if not show else None
+    
+    def plot_cache_conflicts(self, data: Dict[str, Any],
+                             save_path: Optional[str] = None,
+                             show: bool = True) -> plt.Figure:
+        """Строит график с приписком (МК)."""
+        if "error" in data:
+            console.print(f"[red][[-]][/red] Ошибка в данных: {data['error']}")
+            return None
+        
+        data_points = data.get("dataPoints", [])
+        if not data_points:
+            console.print("[red][[-]][/red] Нет данных для построения графика")
+            return None
+        
+        lines = [p["line"] for p in data_points]
+        conflict_times = [p["conflict_ns"] for p in data_points]
+        no_conflict_times = [p["no_conflict_ns"] for p in data_points]
+        
+        fig, ax = plt.subplots(figsize=(12, 7), facecolor='white')
+        ax.plot(lines, conflict_times, 'r-', linewidth=1.5, label='С конфликтами', marker='o', markersize=4)
+        ax.plot(lines, no_conflict_times, 'g-', linewidth=1.5, label='Без конфликтов', marker='s', markersize=4)
+        
+        ax.set_xlabel('Номер линейки', fontsize=12)
+        ax.set_ylabel('Время доступа (нс)', fontsize=12)
+        ax.set_title(self._add_mcu_suffix('Влияние конфликтов в кэш-памяти'), 
+                    fontsize=14, fontweight='bold')
+        ax.grid(True, linestyle='--', alpha=0.7)
+        ax.legend(loc='upper right')
+        
+        plt.tight_layout()
+        
+        actual_save_path = self._get_save_path("exp5_cache_conflicts", save_path)
+        if actual_save_path:
+            fig.savefig(actual_save_path, dpi=150, bbox_inches='tight')
+            console.print(f"[green][[+]][/green] График сохранён: {actual_save_path}")
+        
+        if show:
+            plt.show()
+            plt.close(fig)
+        
+        return fig if not show else None
+    
+    def plot_sorting_algorithms(self, data: Dict[str, Any],
+                                save_path: Optional[str] = None,
+                                show: bool = True) -> plt.Figure:
+        """Строит график с приписком (МК)."""
+        if "error" in data:
+            console.print(f"[red][[-]][/red] Ошибка в данных: {data['error']}")
+            return None
+        
+        elements = data.get("elements", 0)
+        algorithms = {
+            'Bubble': data.get("bubble_sort_us", 0),
+            'Insertion': data.get("insertion_sort_us", 0),
+            'Shell': data.get("shell_sort_us", 0),
+            'Quick': data.get("quick_sort_us", 0),
+        }
+        
+        # Выводим результаты
+        tbl = Table(show_header=False, box=box.SIMPLE, padding=(0, 1))
+        tbl.add_column("Алгоритм", style="bold")
+        tbl.add_column("Время (мкс)")
+        for name, time in algorithms.items():
+            tbl.add_row(name, f"{time:.2f}")
+        
+        console.print(Panel(tbl, title=self._add_mcu_suffix(f"Сортировка {elements} элементов"), border_style="green"))
+        
+        # Bar chart
+        fig, ax = plt.subplots(figsize=(10, 6), facecolor='white')
+        colors = ['#e74c3c', '#f39c12', '#3498db', '#2ecc71']
+        bars = ax.bar(list(algorithms.keys()), list(algorithms.values()), 
+                     color=colors, width=0.6)
+        
+        ax.set_ylabel('Время (мкс)', fontsize=12)
+        ax.set_title(self._add_mcu_suffix(f'Сравнение алгоритмов сортировки ({elements} элементов)'), 
+                    fontsize=14, fontweight='bold')
+        ax.grid(True, linestyle='--', alpha=0.7, axis='y')
+        
+        # Добавляем значения на столбцах
+        for bar, val in zip(bars, algorithms.values()):
+            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.5,
+                   f'{val:.0f}', ha='center', va='bottom', fontsize=10)
+        
+        plt.tight_layout()
+        
+        actual_save_path = self._get_save_path("exp6_sorting", save_path)
+        if actual_save_path:
+            fig.savefig(actual_save_path, dpi=150, bbox_inches='tight')
+            console.print(f"[green][[+]][/green] График сохранён: {actual_save_path}")
+        
+        if show:
+            plt.show()
+            plt.close(fig)
+        
+        return fig if not show else None
+    
+    def plot_generic(self, data: Dict[str, Any],
+                     x_key: str = "step",
+                     y_key: str = "time_us",
+                     title: str = "Результаты эксперимента",
+                     x_label: str = "X",
+                     y_label: str = "Y",
+                     save_path: Optional[str] = None,
+                     show: bool = True) -> plt.Figure:
+        """Строит обобщённый график с приписком (МК)."""
+        return super().plot_generic(
+            data, x_key, y_key, 
+            self._add_mcu_suffix(title), 
+            x_label, y_label, save_path, show
+        )
+

@@ -55,7 +55,17 @@ std::string listVsArrayExperiment(const std::string& params) {
         arr[i] = static_cast<int>(i);
     }
     
-    std::vector<std::tuple<size_t, double, double>> results;
+    // PMU счётчики
+    PerfCounters perfCounters;
+    PmuMetrics listPmu, arrayPmu;
+    
+    struct DataPoint {
+        size_t fragmentation;
+        double list_time_us;
+        double array_time_us;
+        PmuMetrics pmu;
+    };
+    std::vector<DataPoint> results;
     
     setCancelExperiment(false);
     prepareForMeasurement();
@@ -76,6 +86,17 @@ std::string listVsArrayExperiment(const std::string& params) {
         }
         auto end = std::chrono::high_resolution_clock::now();
         arrayTime = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count() / 1000.0;
+    }
+    
+    // PMU для массива
+    if (perfCounters.isAvailable()) {
+        perfCounters.start();
+        volatile int maxArr = arr[0];
+        for (size_t i = 0; i < numElements; i++) {
+            if (arr[i] > maxArr) maxArr = arr[i];
+        }
+        perfCounters.stop();
+        arrayPmu = perfCounters.read();
     }
     
     // Цикл по различным фрагментациям
@@ -116,7 +137,22 @@ std::string listVsArrayExperiment(const std::string& params) {
         auto end = std::chrono::high_resolution_clock::now();
         double listTime = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count() / 1000.0;
         
-        results.push_back({frag * sizeof(int), listTime, arrayTime});
+        // PMU для списка
+        PmuMetrics pointPmu;
+        if (perfCounters.isAvailable()) {
+            perfCounters.start();
+            volatile int m = list[0].val;
+            ListNode* n = &list[0];
+            while (n->next) {
+                n = n->next;
+                if (n->val > m) m = n->val;
+            }
+            perfCounters.stop();
+            pointPmu = perfCounters.read();
+            listPmu += pointPmu;
+        }
+        
+        results.push_back({frag * sizeof(int), listTime, arrayTime, pointPmu});
     }
     
     free(list);
@@ -125,8 +161,8 @@ std::string listVsArrayExperiment(const std::string& params) {
     // Расчёт выводов
     double totalListTime = 0, totalArrayTime = 0;
     for (const auto& r : results) {
-        totalListTime += std::get<1>(r);
-        totalArrayTime += std::get<2>(r);
+        totalListTime += r.list_time_us;
+        totalArrayTime += r.array_time_us;
     }
     double listToArrayRatio = (totalArrayTime > 0) ? totalListTime / totalArrayTime : 0;
     
@@ -147,11 +183,19 @@ std::string listVsArrayExperiment(const std::string& params) {
     json << "\"dataPoints\":[";
     for (size_t i = 0; i < results.size(); i++) {
         if (i > 0) json << ",";
-        json << "{\"fragmentation\":" << std::get<0>(results[i]) 
-             << ",\"list_time_us\":" << std::get<1>(results[i])
-             << ",\"array_time_us\":" << std::get<2>(results[i]) << "}";
+        json << "{\"fragmentation\":" << results[i].fragmentation 
+             << ",\"list_time_us\":" << results[i].list_time_us
+             << ",\"array_time_us\":" << results[i].array_time_us
+             << ",\"cache_misses\":" << results[i].pmu.cache_misses
+             << ",\"branch_misses\":" << results[i].pmu.branch_misses << "}";
     }
-    json << "]}";
+    json << "],";
+    // Итоговые PMU метрики
+    json << "\"pmu_summary\":{";
+    json << "\"list\":" << listPmu.toJson() << ",";
+    json << "\"array\":" << arrayPmu.toJson();
+    json << "}}";
     
     return json.str();
 }
+

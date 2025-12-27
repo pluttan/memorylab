@@ -39,7 +39,18 @@ std::string prefetchExperiment(const std::string& params) {
     memset(p1, 1, arraySize);
     memset(p2, 2, arraySize);
     
-    std::vector<std::tuple<size_t, double, double>> results;
+    struct DataPoint {
+        size_t offset;
+        double no_prefetch_ns;
+        double prefetch_ns;
+        uint64_t cache_misses;
+    };
+    std::vector<DataPoint> results;
+    
+    // PMU счётчики
+    PerfCounters perfCounters;
+    PmuMetrics noPrefetchPmu, prefetchPmu;
+    
     setCancelExperiment(false);
     prepareForMeasurement();
     
@@ -57,6 +68,11 @@ std::string prefetchExperiment(const std::string& params) {
         sink += p2[i / sizeof(int)];
     }
     
+    // PMU для всего блока без предвыборки
+    if (perfCounters.isAvailable()) {
+        perfCounters.start();
+    }
+    
     // Последовательный доступ к p1 - пики появятся при промахах кэша/TLB
     std::vector<double> noPrefetchTimes;
     size_t currentPoint = 0;
@@ -71,10 +87,20 @@ std::string prefetchExperiment(const std::string& params) {
         noPrefetchTimes.push_back(std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count());
     }
     
+    if (perfCounters.isAvailable()) {
+        perfCounters.stop();
+        noPrefetchPmu = perfCounters.read();
+    }
+    
     // === Измерение С ПРЕДВЫБОРКОЙ ===
     // Снова сбрасываем кэш
     for (size_t i = 0; i < arraySize; i += 64) {
         sink += p2[i / sizeof(int)];
+    }
+    
+    // PMU для блока с предвыборкой
+    if (perfCounters.isAvailable()) {
+        perfCounters.start();
     }
     
     // Доступ с предвыборкой следующего блока
@@ -92,6 +118,11 @@ std::string prefetchExperiment(const std::string& params) {
         prefetchTimes.push_back(std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count());
     }
     
+    if (perfCounters.isAvailable()) {
+        perfCounters.stop();
+        prefetchPmu = perfCounters.read();
+    }
+    
     free(p1);
     free(p2);
     
@@ -100,14 +131,14 @@ std::string prefetchExperiment(const std::string& params) {
     
     // Формируем результаты
     for (size_t i = 0; i < noPrefetchTimes.size(); i++) {
-        results.push_back({i * stepSize, noPrefetchTimes[i], prefetchTimes[i]});
+        results.push_back({i * stepSize, noPrefetchTimes[i], prefetchTimes[i], 0});
     }
     
     // Расчёт выводов
     double totalNoPrefetch = 0, totalPrefetch = 0;
     for (const auto& r : results) {
-        totalNoPrefetch += std::get<1>(r);
-        totalPrefetch += std::get<2>(r);
+        totalNoPrefetch += r.no_prefetch_ns;
+        totalPrefetch += r.prefetch_ns;
     }
     double noPrefetchToPrefetchRatio = (totalPrefetch > 0) ? totalNoPrefetch / totalPrefetch : 0;
     
@@ -127,11 +158,17 @@ std::string prefetchExperiment(const std::string& params) {
     json << "\"dataPoints\":[";
     for (size_t i = 0; i < results.size(); i++) {
         if (i > 0) json << ",";
-        json << "{\"offset\":" << std::get<0>(results[i]) 
-             << ",\"no_prefetch_ns\":" << std::get<1>(results[i])
-             << ",\"prefetch_ns\":" << std::get<2>(results[i]) << "}";
+        json << "{\"offset\":" << results[i].offset 
+             << ",\"no_prefetch_ns\":" << results[i].no_prefetch_ns
+             << ",\"prefetch_ns\":" << results[i].prefetch_ns << "}";
     }
-    json << "]}";
+    json << "],";
+    // Итоговые PMU метрики
+    json << "\"pmu_summary\":{";
+    json << "\"no_prefetch\":" << noPrefetchPmu.toJson() << ",";
+    json << "\"prefetch\":" << prefetchPmu.toJson();
+    json << "}}";
     
     return json.str();
 }
+

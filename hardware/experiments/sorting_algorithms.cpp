@@ -59,8 +59,19 @@ std::string sortingAlgorithmsExperiment(const std::string& params) {
         return "{\"error\":\"Failed to allocate memory\"}";
     }
     
+    // PMU счётчики
+    PerfCounters perfCounters;
+    PmuMetrics quickSortPmu, radixPmu, radixOptPmu;
+    
     // Результаты: elements, quicksort, radix, radix_opt
-    std::vector<std::tuple<size_t, double, double, double>> results;
+    struct DataPoint {
+        size_t elements;
+        double quicksort_time_us;
+        double radix_time_us;
+        double radix_opt_time_us;
+    };
+    std::vector<DataPoint> results;
+    
     setCancelExperiment(false);
     prepareForMeasurement();
     
@@ -89,15 +100,21 @@ std::string sortingAlgorithmsExperiment(const std::string& params) {
         }
         
         // ===== 1. QuickSort =====
+        if (perfCounters.isAvailable()) perfCounters.start();
         auto start1 = std::chrono::high_resolution_clock::now();
         quickSort(qmas, 0, numElements - 1);
         auto end1 = std::chrono::high_resolution_clock::now();
+        if (perfCounters.isAvailable()) {
+            perfCounters.stop();
+            quickSortPmu += perfCounters.read();
+        }
         double quickSortTime = std::chrono::duration_cast<std::chrono::nanoseconds>(end1 - start1).count() / 1000.0;
         
         // ===== 2. Radix-Counting Sort (обычный) =====
         uint64_t* tmpA64 = reinterpret_cast<uint64_t*>(rmas);
         uint64_t* tmpB64 = reinterpret_cast<uint64_t*>(tmp);
         
+        if (perfCounters.isAvailable()) perfCounters.start();
         auto start2 = std::chrono::high_resolution_clock::now();
         int c[256];
         for (int pass = 0; pass < 8; pass++) {
@@ -126,12 +143,17 @@ std::string sortingAlgorithmsExperiment(const std::string& params) {
             tmpB64 = reinterpret_cast<uint64_t*>(tmp);
         }
         auto end2 = std::chrono::high_resolution_clock::now();
+        if (perfCounters.isAvailable()) {
+            perfCounters.stop();
+            radixPmu += perfCounters.read();
+        }
         double radixTime = std::chrono::duration_cast<std::chrono::nanoseconds>(end2 - start2).count() / 1000.0;
         
         // ===== 3. Radix-Counting Sort (оптимизированный под 8 процессоров) =====
         uint64_t* tmpA64_opt = reinterpret_cast<uint64_t*>(rmas_opt);
         uint64_t* tmpB64_opt = reinterpret_cast<uint64_t*>(tmp_opt);
         
+        if (perfCounters.isAvailable()) perfCounters.start();
         auto start3 = std::chrono::high_resolution_clock::now();
         
         // Массив счётчиков для всех 8 проходов (256 * 8)
@@ -181,6 +203,10 @@ std::string sortingAlgorithmsExperiment(const std::string& params) {
         }
         
         auto end3 = std::chrono::high_resolution_clock::now();
+        if (perfCounters.isAvailable()) {
+            perfCounters.stop();
+            radixOptPmu += perfCounters.read();
+        }
         double radixOptTime = std::chrono::duration_cast<std::chrono::nanoseconds>(end3 - start3).count() / 1000.0;
         
         results.push_back({numElements, quickSortTime, radixTime, radixOptTime});
@@ -195,9 +221,9 @@ std::string sortingAlgorithmsExperiment(const std::string& params) {
     // Расчёт выводов
     double totalQuickSort = 0, totalRadix = 0, totalRadixOpt = 0;
     for (size_t i = 0; i < results.size(); i++) {
-        totalQuickSort += std::get<1>(results[i]);
-        totalRadix += std::get<2>(results[i]);
-        totalRadixOpt += std::get<3>(results[i]);
+        totalQuickSort += results[i].quicksort_time_us;
+        totalRadix += results[i].radix_time_us;
+        totalRadixOpt += results[i].radix_opt_time_us;
     }
     double quickToRadixRatio = (totalRadix > 0) ? totalQuickSort / totalRadix : 0;
     double quickToRadixOptRatio = (totalRadixOpt > 0) ? totalQuickSort / totalRadixOpt : 0;
@@ -222,12 +248,19 @@ std::string sortingAlgorithmsExperiment(const std::string& params) {
     json << "\"dataPoints\":[";
     for (size_t i = 0; i < results.size(); i++) {
         if (i > 0) json << ",";
-        json << "{\"elements\":" << std::get<0>(results[i]) 
-             << ",\"quicksort_time_us\":" << std::get<1>(results[i])
-             << ",\"radix_time_us\":" << std::get<2>(results[i])
-             << ",\"radix_opt_time_us\":" << std::get<3>(results[i]) << "}";
+        json << "{\"elements\":" << results[i].elements 
+             << ",\"quicksort_time_us\":" << results[i].quicksort_time_us
+             << ",\"radix_time_us\":" << results[i].radix_time_us
+             << ",\"radix_opt_time_us\":" << results[i].radix_opt_time_us << "}";
     }
-    json << "]}";
+    json << "],";
+    // Итоговые PMU метрики
+    json << "\"pmu_summary\":{";
+    json << "\"quicksort\":" << quickSortPmu.toJson() << ",";
+    json << "\"radix\":" << radixPmu.toJson() << ",";
+    json << "\"radix_opt\":" << radixOptPmu.toJson();
+    json << "}}";
     
     return json.str();
 }
+

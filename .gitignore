@@ -50,6 +50,13 @@ report/
 *.tmp
 *.temp
 .new_project_root
+.mcu_port
+
+# PlatformIO
+hardware-mc/.pio/
+hardware-mc/.vscode/
+hardware-mc/lib/
+hardware-mc/include/
 
 # DOOM build artifacts
 doom_src/build/

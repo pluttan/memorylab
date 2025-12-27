@@ -8,6 +8,7 @@
 #include "experiments/memory_read_optimization.cpp"
 #include "experiments/cache_conflicts.cpp"
 #include "experiments/sorting_algorithms.cpp"
+#include "experiments/self_modifying.cpp"
 
 /**
  * @brief Инициализация функций
@@ -54,6 +55,13 @@ void initializeFunctions() {
         "sorting_algorithms",
         "Сравнение алгоритмов сортировки. Параметры: param1 (1-20 М элементов), param2 (4-1024 К шаг)",
         sortingAlgorithmsExperiment
+    );
+    
+    // Самомодифицирующийся код
+    functionRegistry.registerFunction(
+        "self_modifying_code",
+        "Демонстрация самомодифицирующегося кода. Параметры: param1 (1-1000 модификаций), param2 (1-100 начальное значение)",
+        selfModifyingCodeExperiment
     );
 }
 

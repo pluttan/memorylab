@@ -7,7 +7,7 @@
 ```bash
 # Для компьютеров на кафедре раскоментируйте:
 # sudo apt update
-# sudo apt install -y python3-dev python3-venv ttf-mscorefonts-installer
+# sudo apt install -y python3-dev python3-venv ttf-mscorefonts-installer libsdl2-dev libsdl2-mixer-dev libsdl2-net-dev
 # Клонируем в папку с вашей фамилией (транслит)
 folder=lab4_Фамилия
 git clone https://github.com/pluttan/memorylab.git $folder
@@ -27,19 +27,23 @@ make all
 ## Структура проекта
 
 ```
-├── hardware/           # C++ сервер HardwareTester
-│   ├── server.cpp      # WebSocket сервер
-│   ├── functions.cpp   # Эксперименты с памятью
-│   └── tester.cpp      # Класс для измерений
+├── hardware/              # C++ сервер HardwareTester (для ПК)
+│   ├── server.cpp         # WebSocket сервер
+│   ├── functions.cpp      # Эксперименты с памятью
+│   └── tester.cpp         # Класс для измерений
+├── hardware-mc/           # Версия для микроконтроллеров
+│   ├── platformio.ini     # Конфигурация PlatformIO
+│   ├── main.cpp           # UART интерфейс
+│   └── experiments/       # Эксперименты для МК
 ├── iu6hardwarememorylab/  # Python-клиент
 │   ├── hardware_client.py # Клиент для сервера
 │   ├── generatereport.py  # Генератор отчёта
 │   ├── watch_report.py    # Автокомпиляция отчёта
 │   └── pretty_print.py    # Красивый вывод
-├── lab/                # Jupyter notebook
+├── lab/                   # Jupyter notebook
 │   └── memory_experiment.ipynb
-├── report/             # Отчёт (генерируется)
-└── Makefile            # Автоматизация
+├── report/                # Отчёт (генерируется)
+└── Makefile               # Автоматизация
 ```
 
 ## Основные команды
@@ -53,6 +57,30 @@ make all
 | `make report-watch` | Запуск автокомпиляции отчёта |
 | `make logs` | Показать логи |
 | `make help` | Справка по командам |
+
+## PlatformIO (микроконтроллеры)
+
+Для запуска экспериментов на микроконтроллерах:
+
+```bash
+# Установить PlatformIO
+make pio-install
+
+# Собрать и загрузить (по умолчанию ESP32)
+make pio-build
+make pio-upload
+
+# UART монитор
+make pio-monitor
+
+# Другая плата (например STM32 Black Pill)
+make pio-build PIO_ENV=stm32f411
+
+# Список всех плат
+make pio-boards
+```
+
+Подробнее: [hardware-mc/README.md](hardware-mc/README.md)
 
 ## Эксперименты
 
@@ -71,7 +99,9 @@ make all
 - OpenSSL (для WebSocket)
 - Git (для клонирования пакетов Typst)
 - Times New Roman
+- libsdl2
 
 ## Лицензия
 
-MIT
+GNU General Public License v2 (GPL-2.0)
+[LICENSE.md](LICENSE.md).
