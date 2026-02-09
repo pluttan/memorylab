@@ -31,10 +31,6 @@ make all
 │   ├── server.cpp         # WebSocket сервер
 │   ├── functions.cpp      # Эксперименты с памятью
 │   └── tester.cpp         # Класс для измерений
-├── hardware-mc/           # Версия для микроконтроллеров
-│   ├── platformio.ini     # Конфигурация PlatformIO
-│   ├── main.cpp           # UART интерфейс
-│   └── experiments/       # Эксперименты для МК
 ├── iu6hardwarememorylab/  # Python-клиент
 │   ├── hardware_client.py # Клиент для сервера
 │   ├── generatereport.py  # Генератор отчёта
@@ -57,30 +53,6 @@ make all
 | `make report-watch` | Запуск автокомпиляции отчёта |
 | `make logs` | Показать логи |
 | `make help` | Справка по командам |
-
-## PlatformIO (микроконтроллеры)
-
-Для запуска экспериментов на микроконтроллерах:
-
-```bash
-# Установить PlatformIO
-make pio-install
-
-# Собрать и загрузить (по умолчанию ESP32)
-make pio-build
-make pio-upload
-
-# UART монитор
-make pio-monitor
-
-# Другая плата (например STM32 Black Pill)
-make pio-build PIO_ENV=stm32f411
-
-# Список всех плат
-make pio-boards
-```
-
-Подробнее: [hardware-mc/README.md](hardware-mc/README.md)
 
 ## Эксперименты
 

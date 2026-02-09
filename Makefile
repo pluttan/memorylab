@@ -87,8 +87,6 @@ help:
 	@echo "$(LINE)"
 	@echo " make build    - Собрать сервер"
 	@echo " make server   - Запустить сервер HardwareTester"
-	@echo " make server-mcu - UART-WebSocket сервер для МК"
-	@echo " make mcu-run  - Запустить UART-сервер + Jupyter Lab"
 	@echo " make notebook - Запустить Jupyter Notebook"
 	@echo " make lab      - Запустить Jupyter Lab"
 	@echo " make doom-build - Собрать DOOM"
@@ -99,13 +97,6 @@ help:
 	@echo " make stop     - Остановить все процессы"
 	@echo " make logs     - Показать логи"
 	@echo " make clean    - Удалить всё"
-	@echo ""
-	@echo " PlatformIO (микроконтроллеры):"
-	@echo " make pio         - Интерактивный выбор МК + сборка + загрузка"
-	@echo " make pio-build   - Интерактивный выбор + сборка"
-	@echo " make pio-upload  - Интерактивный выбор + загрузка"
-	@echo " make pio-boards  - Показать список плат"
-	@echo " make pio-monitor - UART монитор"
 	@echo ""
 	@echo " Отчёт:"
 	@echo " make all             - Сгенерировать/обновить отчёт (PDF в корне)"
@@ -166,21 +157,6 @@ kill-server: kill-port
 server: build kill-server $(LOG_DIR)
 	@cd $(HARDWARE_DIR) && ./server > ../$(SERVER_LOG) 2>&1
 
-# Запустить WebSocket сервер для МК (через UART)
-server-mcu: deps kill-server $(LOG_DIR)
-	@$(PYTHON) -m iu6hardwarememorylab.uart_server
-
-# Запустить сервер МК в фоне и открыть lab
-mcu-run: deps kill-server $(LOG_DIR) $(IMG_DIR)
-	@$(PRETTY) header "Запуск UART-WebSocket сервера для МК"
-	@$(PYTHON) -m iu6hardwarememorylab.uart_server > $(SERVER_LOG) 2>&1 &
-	@sleep 3
-	@$(PRETTY) success "Сервер запущен"
-	@$(PRETTY) info "Log: $(SERVER_LOG)"
-	@$(PRETTY) header "Jupyter Lab"
-	@$(PRETTY) success "URL: http://localhost:$(JUPYTER_PORT)"
-	@cd $(TEST_DIR) && ./../$(PYTHON) -m jupyter lab --port=$(JUPYTER_PORT) > ../$(JUPYTER_LOG) 2>&1
-
 # Запустить Jupyter Notebook
 notebook: deps $(LOG_DIR)
 	@$(PRETTY) header "Jupyter Notebook"
@@ -235,8 +211,8 @@ run: build deps kill-server doom-build $(LOG_DIR) $(IMG_DIR)
 	@$(PRETTY) info "DOOM Log: $(DOOM_LOG)"
 	@cd $(TEST_DIR) && ./../$(PYTHON) -m jupyter lab --port=$(JUPYTER_PORT) > ../$(JUPYTER_LOG) 2>&1
 
-# Главная цель: установка всего, настройка отчёта, запуск сервера + DOOM + lab + МК
-all: report-setup build deps kill-server doom-build pio-install $(LOG_DIR) $(IMG_DIR)
+# Главная цель: установка всего, настройка отчёта, запуск сервера + DOOM + lab
+all: report-setup build deps kill-server doom-build $(LOG_DIR) $(IMG_DIR)
 	@$(PRETTY) header "Настройка и запуск всех компонентов"
 	@# Интерактивная настройка отчёта (генерация main.typ)
 	@$(PYTHON) -c "from iu6hardwarememorylab import generate_report; generate_report(interactive=True, perform_build=False)"
@@ -254,39 +230,6 @@ all: report-setup build deps kill-server doom-build pio-install $(LOG_DIR) $(IMG
 	@$(PRETTY_RAW) header "Запуск DOOM..."
 	@$(DOOM_BIN) -iwad $(DOOM_DIR)/DOOM1.WAD -nosound > $(DOOM_LOG) 2>&1 &
 	@sleep 1
-	@$(PRETTY) header "Программирование микроконтроллера"
-	@$(PRETTY) info "Сейчас будет предложен выбор платы и порта..."
-	@# Интерактивный выбор МК, сборка, загрузка — сохраняем порт в файл
-	@$(PYTHON) -c "\
-import sys; \
-sys.path.insert(0, '.'); \
-from iu6hardwarememorylab.pio_select import select_environment, get_serial_ports, select_port, run_build, run_upload; \
-from pathlib import Path; \
-hw_dir = Path('hardware-mc'); \
-env = select_environment(); \
-ret = run_build(env, hw_dir); \
-if ret != 0: sys.exit(ret); \
-ports = get_serial_ports(); \
-port = select_port(ports); \
-if not port: sys.exit(1); \
-ret = run_upload(env, port, hw_dir); \
-if ret != 0: sys.exit(ret); \
-Path('.mcu_port').write_text(port); \
-print(f'Порт сохранён: {port}')"
-	@$(PRETTY) success "Микроконтроллер запрограммирован!"
-	@# Останавливаем desktop-сервер и запускаем UART-сервер на том же порту
-	@$(PRETTY) info "Переключение на UART-сервер для МК..."
-	@pkill -f "hardware/server" 2>/dev/null || true
-	@sleep 1
-	@MCU_PORT=$$(cat .mcu_port 2>/dev/null || echo ""); \
-	if [ -n "$$MCU_PORT" ]; then \
-		$(PRETTY) info "Запуск UART-сервера на порту $$MCU_PORT..."; \
-		$(PYTHON) -m iu6hardwarememorylab.uart_server -p "$$MCU_PORT" > $(SERVER_LOG) 2>&1 & \
-		sleep 2; \
-		$(PRETTY) success "UART-сервер запущен!"; \
-	else \
-		$(PRETTY) error "Порт МК не найден, UART-сервер не запущен"; \
-	fi
 	@$(PRETTY) info "Запуск Jupyter Lab..."
 	@$(PRETTY) success "URL: http://localhost:$(JUPYTER_PORT)"
 	@$(PRETTY) info "Логи: $(LOG_DIR)/"
@@ -425,71 +368,3 @@ clean-report:
 	@echo " Status: Готово"
 	@echo "$(LINE)"
 
-# ==================== PLATFORMIO (МИКРОКОНТРОЛЛЕРЫ) ====================
-
-HARDWARE_MC_DIR = hardware-mc
-PIO_SELECT = $(PYTHON) -m iu6hardwarememorylab.pio_select
-
-# Проверить и установить PlatformIO CLI (через pipx для изоляции)
-pio-install:
-	@$(PRETTY_RAW) header "Установка PlatformIO CLI"
-	@if command -v pio >/dev/null 2>&1; then \
-		$(PRETTY_RAW) success "PlatformIO уже установлен: $$(pio --version)"; \
-	else \
-		$(PRETTY_RAW) info "Установка через pipx..."; \
-		if ! command -v pipx >/dev/null 2>&1; then \
-			$(PRETTY_RAW) info "Установка pipx..."; \
-			python3 -m pip install --user pipx; \
-			python3 -m pipx ensurepath; \
-		fi; \
-		pipx install platformio; \
-		$(PRETTY_RAW) success "PlatformIO установлен!"; \
-		$(PRETTY_RAW) info "Перезапустите терминал или выполните: source ~/.bashrc"; \
-	fi
-
-# Интерактивный выбор МК + сборка + загрузка + монитор
-pio: deps pio-install
-	@$(PIO_SELECT) all
-
-# Интерактивный выбор и сборка прошивки
-pio-build: deps pio-install
-	@$(PIO_SELECT) build
-
-# Интерактивный выбор и загрузка прошивки
-pio-upload: deps pio-install
-	@$(PIO_SELECT) upload
-
-# UART монитор
-pio-monitor: pio-install
-	@$(PRETTY_RAW) header "UART Monitor (115200 baud)"
-	@cd $(HARDWARE_MC_DIR) && pio device monitor -b 115200
-
-# Быстрая сборка без интерактивного меню (с указанием PIO_ENV)
-pio-quick: pio-install
-	@if [ -z "$(PIO_ENV)" ]; then \
-		$(PRETTY_RAW) error "Укажите PIO_ENV, например: make pio-quick PIO_ENV=esp32"; \
-		exit 1; \
-	fi
-	@$(PRETTY_RAW) header "Сборка прошивки (env: $(PIO_ENV))"
-	@cd $(HARDWARE_MC_DIR) && pio run -e $(PIO_ENV)
-	@$(PRETTY_RAW) success "Прошивка собрана!"
-
-# Быстрая загрузка без интерактивного меню
-pio-quick-upload: pio-install
-	@if [ -z "$(PIO_ENV)" ]; then \
-		$(PRETTY_RAW) error "Укажите PIO_ENV, например: make pio-quick-upload PIO_ENV=esp32"; \
-		exit 1; \
-	fi
-	@$(PRETTY_RAW) header "Загрузка прошивки (env: $(PIO_ENV))"
-	@cd $(HARDWARE_MC_DIR) && pio run -e $(PIO_ENV) -t upload
-	@$(PRETTY_RAW) success "Прошивка загружена!"
-
-# Очистить сборку PlatformIO
-pio-clean:
-	@$(PRETTY_RAW) header "Очистка PlatformIO"
-	@rm -rf $(HARDWARE_MC_DIR)/.pio
-	@$(PRETTY_RAW) success "Очищено"
-
-# Показать список доступных плат через интерактивное меню
-pio-boards: deps
-	@$(PIO_SELECT) select
