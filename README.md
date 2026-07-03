@@ -1,107 +1,60 @@
-# Лабораторная работа №4: Исследование памяти ЭВМ
+<div align="center">
 
-Автоматизированная система для выполнения лабораторной работы по исследованию иерархии памяти компьютера.
+# MemoryLab
 
-## Быстрый старт
+**Automated memory hierarchy research lab**
+
+</div>
+
+An automated system for the BMSTU ИУ-6 computer memory hierarchy lab. A hand-rolled C++ WebSocket server (`HardwareTester`) runs seven cache/memory experiments on the host CPU, a Python client driven from a Jupyter notebook collects and plots the results, and a Typst pipeline generates and live-recompiles the PDF report. A bundled Chocolate DOOM build is used as a JIT vs. branching cache-load workload for the self-modifying-code experiment.
+
+## ■ Features
+
+- ❖ **Memory stratification** — detect L1/L2/L3 cache sizes experimentally
+- ❖ **List vs array** — compare access time for linked lists and arrays
+- ❖ **Prefetch analysis** — measure the effect of software prefetching
+- ❖ **Read optimization** — multithreaded sequential memory read scaling
+- ❖ **Cache conflicts** — study the impact of set associativity and bank/line geometry
+- ❖ **Sorting benchmarks** — compare algorithm performance with cache effects
+- ❖ **Self-modifying code** — JIT vs. branching, benchmarked against a live DOOM run
+- ❖ **Auto-report** — Typst PDF generation with `watchdog` file-watch and auto-recompilation
+- ❖ **One-command setup** — `make all` handles deps, build, report, DOOM and Jupyter Lab
+
+## ■ Stack
+
+<div align="center">
+
+| Component | Technology |
+|-----------|------------|
+| Server | C++17, raw-socket WebSocket, OpenSSL |
+| Experiments | C++17, std::thread |
+| Client | Python, websockets, rich, matplotlib, numpy |
+| Analysis | Jupyter Lab |
+| Reports | Typst 0.13, typst-bmstu + typst-g7.32-2017 |
+| Workload | Chocolate DOOM (CMake) |
+| Build | Make, vcpkg |
+
+</div>
+
+## ■ How It Works
+
+```
+1. `make all` installs dependencies via vcpkg, builds the C++ HardwareTester server and Chocolate DOOM.
+2. The HardwareTester WebSocket server starts and executes seven cache/memory experiments on the host CPU.
+3. The Python client connects over WebSocket from Jupyter Lab, collects results, and plots them with matplotlib/numpy.
+4. Typst watches the output directory via watchdog and live-recompiles the PDF lab report on every change.
+```
+
+## ■ Usage
 
 ```bash
-# Для компьютеров на кафедре раскоментируйте:
-# sudo apt update
-# sudo apt install -y python3-dev python3-venv ttf-mscorefonts-installer libsdl2-dev libsdl2-mixer-dev libsdl2-net-dev
-# Клонируем в папку с вашей фамилией (транслит)
-folder=lab4_Фамилия
-git clone https://github.com/pluttan/memorylab.git $folder
-cd $folder
-make all
+git clone https://github.com/pluttan/memorylab.git
+cd memorylab
+make all     # full setup: deps, build, report, DOOM, Jupyter Lab
+make run     # start server + DOOM + Jupyter Lab
+make stop    # stop all processes
 ```
 
-Эта команда:
-1. Скачает и настроит Typst для генерации отчёта
-2. Скомпилирует сервер HardwareTester
-3. Создаст виртуальное окружение Python и установит зависимости
-4. Запросит данные для титульной страницы
-5. Сгенерирует шаблон отчёта и скомпилирует PDF
-6. Запустит режим наблюдения за отчётом (автокомпиляция)
-7. Запустит сервер и Jupyter Lab
+## ■ License
 
-## Структура проекта
-
-```
-├── hardware/              # C++ сервер HardwareTester (для ПК)
-│   ├── server.cpp         # WebSocket сервер
-│   ├── functions.cpp      # Эксперименты с памятью
-│   └── tester.cpp         # Класс для измерений
-├── hardware-mc/           # Версия для микроконтроллеров
-│   ├── platformio.ini     # Конфигурация PlatformIO
-│   ├── main.cpp           # UART интерфейс
-│   └── experiments/       # Эксперименты для МК
-├── iu6hardwarememorylab/  # Python-клиент
-│   ├── hardware_client.py # Клиент для сервера
-│   ├── generatereport.py  # Генератор отчёта
-│   ├── watch_report.py    # Автокомпиляция отчёта
-│   └── pretty_print.py    # Красивый вывод
-├── lab/                   # Jupyter notebook
-│   └── memory_experiment.ipynb
-├── report/                # Отчёт (генерируется)
-└── Makefile               # Автоматизация
-```
-
-## Основные команды
-
-| Команда | Описание |
-|---------|----------|
-| `make all` | Полная настройка и запуск |
-| `make run` | Запуск сервера + Jupyter Lab |
-| `make clean` | Очистка всех генерируемых файлов |
-| `make report-setup` | Настройка окружения для отчёта |
-| `make report-watch` | Запуск автокомпиляции отчёта |
-| `make logs` | Показать логи |
-| `make help` | Справка по командам |
-
-## PlatformIO (микроконтроллеры)
-
-Для запуска экспериментов на микроконтроллерах:
-
-```bash
-# Установить PlatformIO
-make pio-install
-
-# Собрать и загрузить (по умолчанию ESP32)
-make pio-build
-make pio-upload
-
-# UART монитор
-make pio-monitor
-
-# Другая плата (например STM32 Black Pill)
-make pio-build PIO_ENV=stm32f411
-
-# Список всех плат
-make pio-boards
-```
-
-Подробнее: [hardware-mc/README.md](hardware-mc/README.md)
-
-## Эксперименты
-
-1. **Стратификация памяти** — определение размеров кэшей L1, L2, L3
-2. **Список vs Массив** — сравнение времени доступа
-3. **Prefetch** — влияние предвыборки данных
-4. **Оптимизация чтения** — последовательный vs случайный доступ
-5. **Конфликты кэша** — влияние ассоциативности
-6. **Алгоритмы сортировки** — сравнение производительности
-
-## Требования
-
-- macOS / Linux
-- Python 3.9+, python-venv, python-dev
-- g++ с поддержкой C++17
-- OpenSSL (для WebSocket)
-- Git (для клонирования пакетов Typst)
-- Times New Roman
-- libsdl2
-
-## Лицензия
-
-GNU General Public License v2 (GPL-2.0)
-[LICENSE.md](LICENSE.md).
+GPL-2.0 © [pluttan](https://github.com/pluttan)
