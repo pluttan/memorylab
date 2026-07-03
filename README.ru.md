@@ -1,15 +1,8 @@
-![Header](header.png)
-
 <div align="center">
 
 # MemoryLab
 
 **Автоматизированная исследовательская лаборатория иерархии памяти**
-
-[![License](https://img.shields.io/badge/license-GPL--2.0-2C2C2C?style=for-the-badge&labelColor=1E1E1E)](LICENSE.md)
-[![C++](https://img.shields.io/badge/c++-17-2C2C2C?style=for-the-badge&logo=cplusplus&labelColor=1E1E1E)]()
-[![Python](https://img.shields.io/badge/python-jupyter-2C2C2C?style=for-the-badge&logo=jupyter&labelColor=1E1E1E)]()
-[![Typst](https://img.shields.io/badge/typst-0.13-2C2C2C?style=for-the-badge&logo=typst&labelColor=1E1E1E)]()
 
 </div>
 
@@ -43,7 +36,16 @@
 
 </div>
 
-## ■ Запуск
+## ■ Как это работает
+
+```
+1. `make all` устанавливает зависимости через vcpkg, собирает C++ HardwareTester-сервер и Chocolate DOOM.
+2. WebSocket-сервер HardwareTester запускается и выполняет семь экспериментов с кешем/памятью на CPU хоста.
+3. Python-клиент подключается через WebSocket из Jupyter Lab, собирает результаты и строит графики с помощью matplotlib/numpy.
+4. Typst следит за директорией вывода через watchdog и перекомпилирует PDF-отчёт по лабораторной работе при каждом изменении.
+```
+
+## ■ Использование
 
 ```bash
 git clone https://github.com/pluttan/memorylab.git
@@ -53,6 +55,6 @@ make run     # запустить сервер + DOOM + Jupyter Lab
 make stop    # остановить все процессы
 ```
 
-## ■ License
+## ■ Лицензия
 
 GPL-2.0 © [pluttan](https://github.com/pluttan)
