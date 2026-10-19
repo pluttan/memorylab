@@ -6,6 +6,9 @@
 #include <thread>
 #include <vector>
 #include <algorithm>
+#include <atomic>
+#include <deque>
+#include <csignal>
 #include <unistd.h>
 #include <sys/socket.h>
 #include <sys/time.h>
@@ -143,51 +146,100 @@ private:
         return true;
     }
 
-public:
     /**
-     * @brief Декодирует WebSocket фрейм
+     * @brief Состояние клиентского соединения
+     *
+     * Один recv() может вернуть часть фрейма или несколько фреймов сразу, поэтому
+     * принятые байты накапливаются и разбираются на фреймы по мере поступления.
+     * Команды, пришедшие во время эксперимента (кроме cancel), откладываются
+     * и выполняются после него, а не теряются.
      */
-    std::string decodeFrame(const unsigned char* buffer, size_t length, bool& isClose) {
+    struct Connection {
+        int socket;
+        std::string received;              // Принятые, но ещё не разобранные байты
+        std::deque<std::string> deferred;  // Команды, полученные во время эксперимента
+        bool closed = false;
+    };
+    
+    /**
+     * @brief Извлекает из начала буфера один полный WebSocket фрейм
+     * @param buffer Принятые байты (разобранный фрейм удаляется из начала)
+     * @param message Полезная нагрузка (пустая для служебных фреймов ping/pong)
+     * @param isClose true, если получен фрейм закрытия соединения
+     * @return false, если фрейм ещё не принят целиком
+     */
+    static bool extractFrame(std::string& buffer, std::string& message, bool& isClose) {
         isClose = false;
+        if (buffer.size() < 2) return false;
         
-        if (length < 2) return "";
-        
-        unsigned char opcode = buffer[0] & 0x0F;
-        bool masked = buffer[1] & 0x80;
-        size_t payloadLen = buffer[1] & 0x7F;
-        
-        if (opcode == 0x08) {
-            isClose = true;
-            return "";
-        }
-        
+        const unsigned char* data = reinterpret_cast<const unsigned char*>(buffer.data());
+        unsigned char opcode = data[0] & 0x0F;
+        bool masked = data[1] & 0x80;
+        uint64_t payloadLen = data[1] & 0x7F;
         size_t offset = 2;
         
         if (payloadLen == 126) {
-            payloadLen = (buffer[2] << 8) | buffer[3];
+            if (buffer.size() < 4) return false;
+            payloadLen = (static_cast<uint64_t>(data[2]) << 8) | data[3];
             offset = 4;
         } else if (payloadLen == 127) {
-            // 64-bit length (не поддерживается для простоты)
-            return "";
+            if (buffer.size() < 10) return false;
+            payloadLen = 0;
+            for (int i = 0; i < 8; i++) {
+                payloadLen = (payloadLen << 8) | data[2 + i];
+            }
+            offset = 10;
         }
         
         unsigned char mask[4] = {0};
         if (masked) {
-            memcpy(mask, buffer + offset, 4);
+            if (buffer.size() < offset + 4) return false;
+            memcpy(mask, data + offset, 4);
             offset += 4;
         }
         
-        std::string message;
-        for (size_t i = 0; i < payloadLen && offset + i < length; i++) {
-            if (masked) {
-                message += buffer[offset + i] ^ mask[i % 4];
-            } else {
-                message += buffer[offset + i];
-            }
-        }
+        if (buffer.size() - offset < payloadLen) return false;
         
-        return message;
+        message.resize(payloadLen);
+        for (size_t i = 0; i < payloadLen; i++) {
+            message[i] = static_cast<char>(masked ? data[offset + i] ^ mask[i % 4] : data[offset + i]);
+        }
+        buffer.erase(0, offset + payloadLen);
+        
+        if (opcode == 0x08) {
+            isClose = true;
+            message.clear();
+        } else if (opcode == 0x09 || opcode == 0x0A) {
+            message.clear();  // ping/pong
+        }
+        return true;
     }
+    
+    /**
+     * @brief Ждёт следующее сообщение клиента
+     * @return false, если соединение закрыто
+     */
+    bool receiveMessage(Connection& conn, std::string& message) {
+        char buffer[BUFFER_SIZE];
+        while (true) {
+            bool isClose = false;
+            if (extractFrame(conn.received, message, isClose)) {
+                if (isClose) {
+                    conn.closed = true;
+                    return false;
+                }
+                return true;
+            }
+            int bytesRead = recv(conn.socket, buffer, BUFFER_SIZE, 0);
+            if (bytesRead <= 0) {
+                conn.closed = true;
+                return false;
+            }
+            conn.received.append(buffer, bytesRead);
+        }
+    }
+
+public:
 
     /**
      * @brief Кодирует сообщение в WebSocket фрейм
@@ -225,6 +277,21 @@ public:
     void sendMessage(int clientSocket, const std::string& message) {
         auto frame = encodeFrame(message);
         send(clientSocket, frame.data(), frame.size(), 0);
+    }
+
+    /**
+     * @brief Добавляет в ответ номер запроса (request_id), если клиент его прислал.
+     * По номеру клиент отличает ответ на свой запрос от запоздавшего ответа
+     * на ранее прерванный эксперимент
+     */
+    static std::string withRequestId(const std::string& response, int requestId) {
+        if (requestId < 0) return response;
+        size_t brace = response.find('{');
+        if (brace == std::string::npos) return response;
+        size_t next = response.find_first_not_of(" \t\r\n", brace + 1);
+        bool emptyObject = next != std::string::npos && response[next] == '}';
+        return response.substr(0, brace + 1) + "\"request_id\":" + std::to_string(requestId) +
+               (emptyObject ? "" : ",") + response.substr(brace + 1);
     }
 
 private:
@@ -302,9 +369,9 @@ private:
      * @brief Структура для передачи данных в поток прослушивания
      */
     struct ListenerData {
-        int clientSocket;
+        Connection* connection;
         WebSocketServer* server;
-        volatile bool* stopFlag;
+        std::atomic<bool>* stopFlag;
     };
 
     /**
@@ -312,35 +379,44 @@ private:
      */
     static void* messageListenerThread(void* arg) {
         ListenerData* data = static_cast<ListenerData*>(arg);
+        Connection& conn = *data->connection;
         char buffer[BUFFER_SIZE];
         
         // Устанавливаем неблокирующий режим с таймаутом
         struct timeval tv;
         tv.tv_sec = 0;
         tv.tv_usec = 100000; // 100ms
-        setsockopt(data->clientSocket, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+        setsockopt(conn.socket, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
         
-        while (!(*data->stopFlag)) {
-            int bytesRead = recv(data->clientSocket, buffer, BUFFER_SIZE - 1, 0);
-            if (bytesRead > 0) {
-                bool isClose = false;
-                std::string message = data->server->decodeFrame(
-                    reinterpret_cast<unsigned char*>(buffer), 
-                    bytesRead, 
-                    isClose
-                );
-                
+        while (!(*data->stopFlag) && !conn.closed) {
+            int bytesRead = recv(conn.socket, buffer, BUFFER_SIZE, 0);
+            if (bytesRead == 0) {
+                // Клиент закрыл соединение: эксперимент больше никому не нужен
+                conn.closed = true;
+                setCancelExperiment(true);
+                break;
+            }
+            if (bytesRead < 0) continue;  // Таймаут: проверяем флаг остановки
+            
+            conn.received.append(buffer, bytesRead);
+            std::string message;
+            bool isClose = false;
+            while (extractFrame(conn.received, message, isClose)) {
                 if (isClose) {
+                    conn.closed = true;
                     setCancelExperiment(true);
                     break;
                 }
                 
-                // Проверяем на команду cancel
                 if (message.find("\"cancel\"") != std::string::npos) {
                     setCancelExperiment(true);
                     // Отправляем подтверждение
-                    data->server->sendMessage(data->clientSocket, 
-                        "{\"status\":\"cancelling\",\"message\":\"Cancel request received\"}");
+                    data->server->sendMessage(conn.socket, withRequestId(
+                        "{\"status\":\"cancelling\",\"message\":\"Cancel request received\"}",
+                        SimpleJsonParser::getInt(message, "request_id", -1)));
+                } else if (!message.empty()) {
+                    // Остальные команды выполним после эксперимента
+                    conn.deferred.push_back(message);
                 }
             }
         }
@@ -348,7 +424,7 @@ private:
         // Восстанавливаем блокирующий режим
         tv.tv_sec = 0;
         tv.tv_usec = 0;
-        setsockopt(data->clientSocket, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+        setsockopt(conn.socket, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
         
         return nullptr;
     }
@@ -379,32 +455,36 @@ private:
         std::ostringstream welcome;
         welcome << "{\"type\":\"welcome\",\"serverName\":\"" << serverName << "\",";
         welcome << "\"version\":\"" << SERVER_VERSION << "\",";
+        welcome << "\"features\":[\"request_id\"],";
         welcome << "\"message\":\"Connected to Hardware Tester Server\"}";
         sendMessage(clientSocket, welcome.str());
         
         // Основной цикл обработки сообщений
-        while (running) {
-            bytesRead = recv(clientSocket, buffer, BUFFER_SIZE - 1, 0);
-            if (bytesRead <= 0) break;
-            
-            bool isClose = false;
-            std::string message = decodeFrame(
-                reinterpret_cast<unsigned char*>(buffer), 
-                bytesRead, 
-                isClose
-            );
-            
-            if (isClose) break;
+        Connection conn;
+        conn.socket = clientSocket;
+        while (running && !conn.closed) {
+            std::string message;
+            if (!conn.deferred.empty()) {
+                // Сначала команды, пришедшие во время предыдущего эксперимента
+                message = std::move(conn.deferred.front());
+                conn.deferred.pop_front();
+            } else if (!receiveMessage(conn, message)) {
+                break;
+            }
             
             if (!message.empty()) {
                 // Проверяем, это execute команда?
                 bool isExecute = message.find("\"execute\"") != std::string::npos;
-                
+                int requestId = SimpleJsonParser::getInt(message, "request_id", -1);
+
                 pthread_t listenerThread;
-                volatile bool stopListener = false;
-                ListenerData listenerData = {clientSocket, this, &stopListener};
-                
+                std::atomic<bool> stopListener{false};
+                ListenerData listenerData = {&conn, this, &stopListener};
+
                 if (isExecute) {
+                    // Флаг сбрасываем до запуска слушателя: отмена, пришедшая во время
+                    // подготовки эксперимента (выделение и заполнение памяти), не потеряется
+                    setCancelExperiment(false);
                     // Запускаем параллельный поток для прослушивания cancel команд
                     pthread_create(&listenerThread, nullptr, messageListenerThread, &listenerData);
                 }
@@ -416,8 +496,10 @@ private:
                     stopListener = true;
                     pthread_join(listenerThread, nullptr);
                 }
-                
-                sendMessage(clientSocket, response);
+
+                if (!conn.closed) {
+                    sendMessage(clientSocket, withRequestId(response, requestId));
+                }
             }
         }
         
@@ -445,6 +527,11 @@ public:
      * @return true если сервер успешно запущен
      */
     bool start() {
+        // Запись в соединение, которое клиент уже закрыл (например, перезапуском ядра
+        // Jupyter), по умолчанию завершает весь процесс сигналом SIGPIPE. Игнорируем его:
+        // send() просто вернёт ошибку EPIPE
+        signal(SIGPIPE, SIG_IGN);
+
         // Инициализация функций
         initializeFunctions();
         

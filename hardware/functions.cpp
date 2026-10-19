@@ -18,7 +18,7 @@ void initializeFunctions() {
     // Регистрация эксперимента исследования расслоения памяти
     functionRegistry.registerFunction(
         "memory_stratification",
-        "Исследование расслоения динамической памяти. Параметры: param1 (1-128 КБ), param2 (4-64 Б), param3 (1-16 МБ)",
+        "Исследование расслоения динамической памяти. Параметры: param1 (1-128 КБ), param2 (4-64 Б), param3 (1-1024 МБ, не меньше 4 × L3)",
         memoryStratificationExperiment
     );
     
@@ -32,7 +32,7 @@ void initializeFunctions() {
     // Исследование предвыборки
     functionRegistry.registerFunction(
         "prefetch",
-        "Исследование эффективности программной предвыборки. Параметры: param1 (1-4096 Б шаг), param2 (4-8192 КБ размер)",
+        "Исследование эффективности программной предвыборки. Параметры: param1 (1-4096 Б шаг), param2 (4-8192 КБ размер), param3 (0 - страницы по порядку, 1 - в случайном порядке)",
         prefetchExperiment
     );
     

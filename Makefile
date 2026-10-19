@@ -78,7 +78,7 @@ PRETTY_RAW = python3 iu6hardwarememorylab/pretty_print.py
 # Форматирование вывода (fallback)
 LINE = ========================================
 
-.PHONY: all server jupyter notebook build clean help stop venv deps kill-server kill-port logs report report-setup report-watch report-generate report-compile typst-install clean-report run
+.PHONY: all server jupyter notebook build clean help stop venv deps kill-server kill-port logs report report-setup report-watch report-generate report-compile typst-install clean-report run start
 
 # По умолчанию показываем помощь
 help:
@@ -94,6 +94,7 @@ help:
 	@echo " make doom-build - Собрать DOOM"
 	@echo " make doom-run   - Запустить DOOM"
 	@echo " make run      - Запустить сервер, DOOM и lab"
+	@echo " make start    - Запустить сервер и lab вместе (без DOOM и МК)"
 	@echo " make venv     - Создать виртуальное окружение"
 	@echo " make deps     - Установить зависимости Python"
 	@echo " make stop     - Остановить все процессы"
@@ -142,7 +143,8 @@ deps: $(VENV_DIR)/.deps_installed
 # Собрать сервер
 build: $(SERVER_BIN)
 
-$(SERVER_BIN): $(SERVER_SRC) $(HARDWARE_DIR)/functions.cpp $(HARDWARE_DIR)/tester.cpp
+$(SERVER_BIN): $(SERVER_SRC) $(HARDWARE_DIR)/functions.cpp $(HARDWARE_DIR)/tester.cpp \
+               $(wildcard $(HARDWARE_DIR)/experiments/*.cpp $(HARDWARE_DIR)/experiments/*.hpp)
 	@$(PRETTY_RAW) header "Компиляция сервера"
 	@$(CXX) $(CXXFLAGS) -o $@ $(SERVER_SRC) $(LDFLAGS)
 	@$(PRETTY_RAW) success "Сервер скомпилирован: $(SERVER_BIN)"
@@ -196,6 +198,23 @@ lab: deps $(LOG_DIR)
 	@$(PRETTY) success "URL: http://localhost:$(JUPYTER_PORT)"
 	@$(PRETTY) info "Log: $(JUPYTER_LOG)"
 	@cd $(TEST_DIR) && ./../$(PYTHON) -m jupyter lab --port=$(JUPYTER_PORT) --no-browser > ../$(JUPYTER_LOG) 2>&1
+
+# Запустить сервер (в фоне) и Jupyter Lab вместе, без DOOM и МК.
+# Сервер останавливается вместе с Jupyter (Ctrl+C дважды)
+start: build deps kill-server $(LOG_DIR) $(IMG_DIR)
+	@(cd $(HARDWARE_DIR) && exec ./server > ../$(SERVER_LOG) 2>&1) & \
+	SERVER_PID=$$!; \
+	trap 'kill $$SERVER_PID 2>/dev/null' EXIT INT TERM; \
+	sleep 1; \
+	if ! kill -0 $$SERVER_PID 2>/dev/null; then \
+		$(PRETTY) error "Сервер не запустился, см. $(SERVER_LOG)"; \
+		exit 1; \
+	fi; \
+	$(PRETTY) success "Сервер запущен: порт $(SERVER_PORT), лог $(SERVER_LOG)"; \
+	$(PRETTY) header "Jupyter Lab"; \
+	$(PRETTY) success "URL: http://localhost:$(JUPYTER_PORT)"; \
+	$(PRETTY) info "Log: $(JUPYTER_LOG)"; \
+	cd $(TEST_DIR) && ./../$(PYTHON) -m jupyter lab --port=$(JUPYTER_PORT) > ../$(JUPYTER_LOG) 2>&1
 
 DOOM_DIR = doom_src
 DOOM_BUILD_DIR = $(DOOM_DIR)/build

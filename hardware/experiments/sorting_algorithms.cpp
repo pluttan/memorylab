@@ -44,20 +44,38 @@ std::string sortingAlgorithmsExperiment(const std::string& params) {
     size_t stepElements = static_cast<size_t>(param2) * 1024;
     
     // Выделение памяти
-    uint64_t* qmas = static_cast<uint64_t*>(malloc64(maxElements * sizeof(uint64_t)));
-    uint8_t* rmas = static_cast<uint8_t*>(malloc64(maxElements * sizeof(uint64_t)));
-    uint8_t* tmp = static_cast<uint8_t*>(malloc64(maxElements * sizeof(uint64_t)));
-    uint8_t* rmas_opt = static_cast<uint8_t*>(malloc64(maxElements * sizeof(uint64_t)));
-    uint8_t* tmp_opt = static_cast<uint8_t*>(malloc64(maxElements * sizeof(uint64_t)));
+    size_t bufferBytes = maxElements * sizeof(uint64_t);
+    PageBuffer qmasBuffer(bufferBytes, PageMode::Huge);
+    PageBuffer rmasBuffer(bufferBytes, PageMode::Huge);
+    PageBuffer tmpBuffer(bufferBytes, PageMode::Huge);
+    PageBuffer rmasOptBuffer(bufferBytes, PageMode::Huge);
+    PageBuffer tmpOptBuffer(bufferBytes, PageMode::Huge);
     
-    if (!qmas || !rmas || !tmp || !rmas_opt || !tmp_opt) {
-        if (qmas) free(qmas);
-        if (rmas) free(rmas);
-        if (tmp) free(tmp);
-        if (rmas_opt) free(rmas_opt);
-        if (tmp_opt) free(tmp_opt);
-        return "{\"error\":\"Failed to allocate memory\"}";
+    if (!qmasBuffer.ok() || !rmasBuffer.ok() || !tmpBuffer.ok() || !rmasOptBuffer.ok() || !tmpOptBuffer.ok()) {
+        return allocationError(5 * bufferBytes);
     }
+    
+    // Заполняем все буферы заранее: иначе первое обращение к новым страницам
+    // (page fault) попадает в замер, особенно для временных массивов radix-сортировки
+    for (PageBuffer* b : {&qmasBuffer, &rmasBuffer, &tmpBuffer, &rmasOptBuffer, &tmpOptBuffer}) {
+        memset(b->bytes(), 0, bufferBytes);
+    }
+    
+    uint64_t* qmas = qmasBuffer.as<uint64_t>();
+    uint8_t* rmas = rmasBuffer.as<uint8_t>();
+    uint8_t* tmp = tmpBuffer.as<uint8_t>();
+    uint8_t* rmas_opt = rmasOptBuffer.as<uint8_t>();
+    uint8_t* tmp_opt = tmpOptBuffer.as<uint8_t>();
+    
+    // Генератор splitmix64: все 64 разряда случайны. rand() даёт только 31 бит,
+    // поэтому разряды 31 и 63 элементов всегда были нулевыми
+    uint64_t rngState = 0x9E3779B97F4A7C15ull;
+    auto nextRandom = [&rngState]() {
+        uint64_t z = (rngState += 0x9E3779B97F4A7C15ull);
+        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+        z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+        return z ^ (z >> 31);
+    };
     
     // PMU счётчики
     PerfCounters perfCounters;
@@ -72,7 +90,6 @@ std::string sortingAlgorithmsExperiment(const std::string& params) {
     };
     std::vector<DataPoint> results;
     
-    setCancelExperiment(false);
     prepareForMeasurement();
     
     printf("\n[EXP6] ========== sorting_algorithms ==========\n");
@@ -83,38 +100,31 @@ std::string sortingAlgorithmsExperiment(const std::string& params) {
     
     for (size_t numElements = stepElements; numElements <= maxElements; numElements += stepElements) {
         if (isCancelled()) {
-            free(qmas);
-            free(rmas);
-            free(tmp);
-            free(rmas_opt);
-            free(tmp_opt);
             return "{\"error\":\"Experiment cancelled\",\"cancelled\":true}";
         }
         
         // Генерация случайных данных
         for (size_t i = 0; i < numElements; i++) {
-            uint64_t val = rand() ^ (static_cast<uint64_t>(rand()) << 32);
+            uint64_t val = nextRandom();
             qmas[i] = val;
             reinterpret_cast<uint64_t*>(rmas)[i] = val;
             reinterpret_cast<uint64_t*>(rmas_opt)[i] = val;
         }
         
         // ===== 1. QuickSort =====
-        if (perfCounters.isAvailable()) perfCounters.start();
+        perfCounters.start();
         auto start1 = std::chrono::high_resolution_clock::now();
         quickSort(qmas, 0, numElements - 1);
         auto end1 = std::chrono::high_resolution_clock::now();
-        if (perfCounters.isAvailable()) {
-            perfCounters.stop();
-            quickSortPmu += perfCounters.read();
-        }
+        perfCounters.stop();
+        quickSortPmu += perfCounters.read();
         double quickSortTime = std::chrono::duration_cast<std::chrono::nanoseconds>(end1 - start1).count() / 1000.0;
         
         // ===== 2. Radix-Counting Sort (обычный) =====
         uint64_t* tmpA64 = reinterpret_cast<uint64_t*>(rmas);
         uint64_t* tmpB64 = reinterpret_cast<uint64_t*>(tmp);
         
-        if (perfCounters.isAvailable()) perfCounters.start();
+        perfCounters.start();
         auto start2 = std::chrono::high_resolution_clock::now();
         int c[256];
         for (int pass = 0; pass < 8; pass++) {
@@ -143,17 +153,15 @@ std::string sortingAlgorithmsExperiment(const std::string& params) {
             tmpB64 = reinterpret_cast<uint64_t*>(tmp);
         }
         auto end2 = std::chrono::high_resolution_clock::now();
-        if (perfCounters.isAvailable()) {
-            perfCounters.stop();
-            radixPmu += perfCounters.read();
-        }
+        perfCounters.stop();
+        radixPmu += perfCounters.read();
         double radixTime = std::chrono::duration_cast<std::chrono::nanoseconds>(end2 - start2).count() / 1000.0;
         
         // ===== 3. Radix-Counting Sort (оптимизированный под 8 процессоров) =====
         uint64_t* tmpA64_opt = reinterpret_cast<uint64_t*>(rmas_opt);
         uint64_t* tmpB64_opt = reinterpret_cast<uint64_t*>(tmp_opt);
         
-        if (perfCounters.isAvailable()) perfCounters.start();
+        perfCounters.start();
         auto start3 = std::chrono::high_resolution_clock::now();
         
         // Массив счётчиков для всех 8 проходов (256 * 8)
@@ -203,20 +211,12 @@ std::string sortingAlgorithmsExperiment(const std::string& params) {
         }
         
         auto end3 = std::chrono::high_resolution_clock::now();
-        if (perfCounters.isAvailable()) {
-            perfCounters.stop();
-            radixOptPmu += perfCounters.read();
-        }
+        perfCounters.stop();
+        radixOptPmu += perfCounters.read();
         double radixOptTime = std::chrono::duration_cast<std::chrono::nanoseconds>(end3 - start3).count() / 1000.0;
         
         results.push_back({numElements, quickSortTime, radixTime, radixOptTime});
     }
-    
-    free(qmas);
-    free(rmas);
-    free(tmp);
-    free(rmas_opt);
-    free(tmp_opt);
     
     // Расчёт выводов
     double totalQuickSort = 0, totalRadix = 0, totalRadixOpt = 0;
