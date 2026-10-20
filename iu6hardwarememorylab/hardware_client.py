@@ -82,7 +82,11 @@ class HardwareTesterClient:
         self.websocket = None
         self.server_info: Optional[ServerInfo] = None
         self._connected = False
-        
+        # Номер последнего запроса: сервер возвращает его в ответе, и по нему
+        # отбрасываются запоздавшие ответы на прерванные эксперименты
+        self._request_id = 0
+        self._use_request_id = False
+
         # Создаём папку для изображений если указана
         if self.img_dir:
             os.makedirs(self.img_dir, exist_ok=True)
@@ -130,7 +134,9 @@ class HardwareTesterClient:
                     for category, metrics in pmu_summary.items():
                         f.write(f"  {category}:\n")
                         for key, value in metrics.items():
-                            if isinstance(value, float):
+                            if value is None:
+                                f.write(f"    {key}: нет данных\n")
+                            elif isinstance(value, float):
                                 f.write(f"    {key}: {value:.4f}\n")
                             elif isinstance(value, int) and value > 1000000:
                                 f.write(f"    {key}: {value:,}\n")
@@ -139,7 +145,9 @@ class HardwareTesterClient:
                 else:
                     # Плоский формат (одна категория)
                     for key, value in pmu_summary.items():
-                        if isinstance(value, float):
+                        if value is None:
+                            f.write(f"  {key}: нет данных\n")
+                        elif isinstance(value, float):
                             f.write(f"  {key}: {value:.4f}\n")
                         elif isinstance(value, int) and value > 1000000:
                             f.write(f"  {key}: {value:,}\n")
@@ -417,7 +425,9 @@ class HardwareTesterClient:
             # Получаем приветственное сообщение
             response = await self.websocket.recv()
             data = json.loads(response)
-            
+            # Номера запросов поддерживает только сервер, который сообщил об этом
+            self._use_request_id = "request_id" in data.get("features", [])
+
             self.server_info = ServerInfo(
                 host=self.host,
                 port=self.port,
@@ -489,15 +499,29 @@ class HardwareTesterClient:
         """Отправляет команду серверу и получает ответ."""
         if not self._connected or not self.websocket:
             raise ConnectionError("Не подключено к серверу")
-        
+
+        request_id = None
+        if self._use_request_id:
+            self._request_id += 1
+            request_id = self._request_id
+            command = {**command, "request_id": request_id}
         await self.websocket.send(json.dumps(command))
-        
+
         # Используем цикл с короткими таймаутами для возможности прерывания
         while True:
             try:
                 # Короткий таймаут позволяет проверять CancelledError
                 response = await asyncio.wait_for(self.websocket.recv(), timeout=0.1)
-                return json.loads(response)
+                data = json.loads(response)
+                # После прерывания эксперимента сервер присылает подтверждение отмены
+                # и ответ отменённого эксперимента уже после выхода из этой функции.
+                # Пропускаем их, иначе следующая команда получит чужой ответ
+                if isinstance(data, dict) and "request_id" in data:
+                    if data.pop("request_id") != request_id:
+                        continue
+                elif command.get("action") != "cancel" and self._is_stale_cancel_message(data):
+                    continue
+                return data
             except asyncio.TimeoutError:
                 # Таймаут истёк, проверяем не отменена ли задача
                 # Если задача отменена, при следующей итерации возникнет CancelledError
@@ -523,6 +547,17 @@ class HardwareTesterClient:
                     pass
                 # Выходим, соединение остаётся открытым
                 raise
+    
+    @staticmethod
+    def _is_stale_cancel_message(data: Dict[str, Any]) -> bool:
+        """Сообщение, оставшееся от ранее прерванного эксперимента."""
+        return isinstance(data, dict) and (data.get("status") == "cancelling" or data.get("cancelled") is True)
+    
+    def _print_warning(self, data: Dict[str, Any]):
+        """Выводит предупреждение сервера о условиях эксперимента (если есть)."""
+        warning = data.get("warning")
+        if warning:
+            console.print(f"[yellow][[!]] {warning}[/yellow]")
     
     # ==================== PMU МЕТРИКИ ====================
     
@@ -562,19 +597,20 @@ class HardwareTesterClient:
             ("ipc", "IPC"),
             ("cache_misses", "Промахи кэша"),
             ("branch_misses", "Промахи ветвлений"),
-            ("cache_references", "Обращения к кэшу"),
-            ("branches", "Ветвления"),
             ("dtlb_load_misses", "Промахи dTLB"),
         ]
-        
+
         for metric_key, metric_name in metric_labels:
             values = []
             has_value = False
             for name, pmu in pmu_items.items():
-                val = pmu.get(metric_key, 0)
-                if val != 0:
+                val = pmu.get(metric_key)
+                if val:
                     has_value = True
-                if metric_key == "ipc":
+                if val is None:
+                    # Счётчик недоступен или почти не работал во время замера
+                    values.append("нет данных")
+                elif metric_key == "ipc":
                     values.append(f"{val:.4f}")
                 elif isinstance(val, int) and val > 1000000:
                     values.append(f"{val:,}".replace(",", " "))
@@ -619,20 +655,25 @@ class HardwareTesterClient:
             console.print("[red][[-]][/red] Нет данных для построения графика")
             return None
         
+        self._print_warning(data)
+        
         # Вывод выводов
         if analysis:
             t1_step = analysis.get('T1_step_bytes', 0)
             t2_step = analysis.get('T2_step_bytes', 0)
             banks = analysis.get('estimated_banks', 0)
             page_size = analysis.get('estimated_page_size_bytes', 0)
+            peaks = analysis.get('significant_peaks_bytes', [])
             
             conclusions = Table(show_header=False, box=box.SIMPLE, padding=(0, 1))
             conclusions.add_column("Key", style="bold")
             conclusions.add_column("Value")
-            conclusions.add_row("Точка T1 (первый локальный максимум)", f"{t1_step} байт ({t1_step/1024:.1f} КБ)")
+            conclusions.add_row("Точка T1 (первый значимый максимум)", f"{t1_step} байт ({t1_step/1024:.1f} КБ)")
             conclusions.add_row("Точка T2 (глобальный максимум)", f"{t2_step} байт ({t2_step/1024:.1f} КБ)")
             conclusions.add_row("Количество банков памяти", str(banks))
             conclusions.add_row("Размер страницы памяти", f"{page_size} байт ({page_size/1024:.1f} КБ)")
+            if peaks:
+                conclusions.add_row("Значимые пики (КБ)", ", ".join(f"{p/1024:g}" for p in peaks))
             
             console.print(Panel(conclusions, title="ВЫВОДЫ ЭКСПЕРИМЕНТА 1: Исследование расслоения динамической памяти", border_style="green"))
         
@@ -758,6 +799,8 @@ class HardwareTesterClient:
             console.print("[red][[-]][/red] Нет данных для построения графика")
             return None
         
+        self._print_warning(data)
+        
         # Вывод выводов
         conclusions = data.get("conclusions", {})
         if conclusions:
@@ -860,8 +903,9 @@ class HardwareTesterClient:
         if metrics is None:
             metrics = ["cache_misses", "branch_misses"]
         
-        # Проверяем наличие данных PMU
-        available_metrics = [m for m in metrics if m in data_points[0]]
+        # Проверяем наличие данных PMU (null — счётчик недоступен или почти не работал)
+        available_metrics = [m for m in metrics
+                             if any(p.get(m) is not None for p in data_points)]
         if not available_metrics:
             # Молча пропускаем если PMU данных нет per-point
             return None
@@ -896,7 +940,8 @@ class HardwareTesterClient:
         
         for idx, metric in enumerate(available_metrics):
             ax = axes[idx, 0]
-            y_values = [p.get(metric, 0) for p in data_points]
+            # Точки без данных не рисуем (NaN разрывает линию)
+            y_values = [p[metric] if p.get(metric) is not None else float("nan") for p in data_points]
             
             color = colors[idx % len(colors)]
             label = metric_labels.get(metric, metric)
@@ -968,8 +1013,21 @@ class HardwareTesterClient:
                 tbl.add_row("Время без предвыборки", f"{conclusions.get('total_no_prefetch_us', 0):.2f} мкс")
                 tbl.add_row("Время с предвыборкой", f"{conclusions.get('total_prefetch_us', 0):.2f} мкс")
             tbl.add_row("Замедление без предвыборки", f"{ratio:.2f}x")
+            if "page_first_access_ns" in conclusions:
+                tbl.add_row("Время цикла предвыборки", f"{conclusions.get('prefetch_loop_ns', 0):.0f} нс")
+                tbl.add_row("Отношение с учётом цикла предвыборки", f"{conclusions.get('with_prefetch_loop_ratio', 0):.2f}x")
+                tbl.add_row("Первое обращение к странице (без предвыборки)",
+                            f"{conclusions['page_first_access_ns']:.1f} нс ({conclusions.get('page_first_access_tsc', 0):.0f} тактов TSC)")
+                tbl.add_row("Первое обращение к странице (с предвыборкой)", f"{conclusions.get('page_first_access_prefetch_ns', 0):.1f} нс")
+                tbl.add_row("Остальные обращения (без предвыборки)", f"{conclusions.get('other_access_ns', 0):.1f} нс")
             
             console.print(Panel(tbl, title="ВЫВОДЫ ЭКСПЕРИМЕНТА 3: Эффективность программной предвыборки", border_style="green"))
+        
+        params_exp = data.get("parameters", {})
+        if "timer_resolution_ns" in params_exp:
+            console.print(f"[cyan][[*]][/cyan] Разрешение таймера: {params_exp['timer_resolution_ns']:.1f} нс; "
+                          f"на графике первые {params_exp.get('plotted_points', len(data_points))} "
+                          f"из {params_exp.get('total_accesses', len(data_points))} обращений")
         
         # Выводим PMU метрики
         self._print_pmu_summary(data, "Эксперимент 3")
@@ -1029,7 +1087,10 @@ class HardwareTesterClient:
         fig, ax = plt.subplots(figsize=(12, 7), facecolor='white')
         ax.plot(offsets, no_prefetch, 'r-', linewidth=1.5, label='Без предвыборки')
         ax.plot(offsets, prefetch, 'g-', linewidth=1.5, label='С предвыборкой')
-        ax.set_xlabel('Смещение (байт)', fontsize=12)
+        if data.get("parameters", {}).get("page_order") == "random":
+            ax.set_xlabel('Смещение в порядке обхода, страницы в случайном порядке (байт)', fontsize=12)
+        else:
+            ax.set_xlabel('Смещение (байт)', fontsize=12)
         ax.set_ylabel(y_label, fontsize=12)
         ax.set_title('Исследование эффективности программной предвыборки', fontsize=14, fontweight='bold')
         ax.grid(True, linestyle='--', alpha=0.7)
@@ -1115,6 +1176,9 @@ class HardwareTesterClient:
         fig, ax = plt.subplots(figsize=(12, 7), facecolor='white')
         ax.plot(streams, separate, 'r-', linewidth=1.5, label='Отдельные массивы')
         ax.plot(streams, optimized, 'g-', linewidth=1.5, label='Оптимизированный массив')
+        dram_from = data.get("parameters", {}).get("dram_from_streams", 0)
+        if dram_from:
+            ax.axvline(dram_from, color='gray', linestyle='--', linewidth=1, label='Данные больше LLC')
         ax.set_xlabel('Количество потоков данных', fontsize=12)
         ax.set_ylabel('Время (мкс)', fontsize=12)
         ax.set_title('Исследование оптимизации чтения оперативной памяти', fontsize=14, fontweight='bold')
@@ -1176,9 +1240,12 @@ class HardwareTesterClient:
             tbl = Table(show_header=False, box=box.SIMPLE, padding=(0, 1))
             tbl.add_column("Key", style="bold")
             tbl.add_column("Value")
-            tbl.add_row("Время с конфликтами", f"{conclusions.get('total_conflict_time_us', 0):.2f} мкс")
-            tbl.add_row("Время без конфликтов", f"{conclusions.get('total_no_conflict_time_us', 0):.2f} мкс")
+            tbl.add_row("Среднее время обращения с конфликтами", f"{conclusions.get('avg_conflict_time_ns', 0):.2f} нс")
+            tbl.add_row("Среднее время обращения без конфликтов", f"{conclusions.get('avg_no_conflict_time_ns', 0):.2f} нс")
             tbl.add_row("Замедление при конфликтах", f"{ratio:.2f}x")
+            threshold = conclusions.get('conflict_threshold_lines', 0)
+            if threshold:
+                tbl.add_row("Конфликты начинаются с", f"{threshold} линеек (ассоциативность ≈ {threshold - 1})")
             
             console.print(Panel(tbl, title="ВЫВОДЫ ЭКСПЕРИМЕНТА 5: Конфликты в кэш-памяти", border_style="green"))
         
@@ -1195,14 +1262,14 @@ class HardwareTesterClient:
         )
         
         lines = [p["line"] for p in data_points]
-        conflict = [p["conflict_time_us"] for p in data_points]
-        no_conflict = [p["no_conflict_time_us"] for p in data_points]
+        conflict = [p["conflict_time_ns"] for p in data_points]
+        no_conflict = [p["no_conflict_time_ns"] for p in data_points]
         
         fig, ax = plt.subplots(figsize=(12, 7), facecolor='white')
         ax.plot(lines, conflict, 'r-', linewidth=1.5, label='С конфликтами')
         ax.plot(lines, no_conflict, 'g-', linewidth=1.5, label='Без конфликтов')
-        ax.set_xlabel('Количество линеек', fontsize=12)
-        ax.set_ylabel('Время (мкс)', fontsize=12)
+        ax.set_xlabel('Количество читаемых линеек', fontsize=12)
+        ax.set_ylabel('Среднее время обращения (нс)', fontsize=12)
         ax.set_title('Исследование конфликтов в кэш-памяти', fontsize=14, fontweight='bold')
         ax.grid(True, linestyle='--', alpha=0.7)
         ax.legend(loc='upper left')

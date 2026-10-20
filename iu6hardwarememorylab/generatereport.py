@@ -66,6 +66,7 @@ class ReportGenerator:
                 "T2_time_us": "Время в точке T2",
                 "estimated_banks": "Количество банков памяти",
                 "estimated_page_size_bytes": "Размер страницы памяти",
+                "significant_peaks_bytes": "Значимые пики (шаг, байт)",
             }
         },
         2: {
@@ -121,6 +122,12 @@ class ReportGenerator:
                 "total_no_prefetch_ns": "Общее время без предвыборки",
                 "total_prefetch_ns": "Общее время с предвыборкой",
                 "no_prefetch_to_prefetch_ratio": "Отношение времени",
+                "with_prefetch_loop_ratio": "Отношение времени с учётом цикла предвыборки",
+                "page_first_access_ns": "Время первого обращения к странице",
+                "page_first_access_tsc": "Такты TSC первого обращения к странице",
+                "other_access_ns": "Время остальных обращений",
+                "page_first_access_prefetch_ns": "Время первого обращения к странице с предвыборкой",
+                "prefetch_loop_ns": "Время цикла предвыборки",
             }
         },
         4: {
@@ -170,9 +177,12 @@ class ReportGenerator:
                 "param3_lines": "Количество линеек",
             },
             "result_labels": {
-                "total_conflict_time_us": "Общее время с конфликтами",
-                "total_no_conflict_time_us": "Общее время без конфликтов",
+                "total_conflict_time_ns": "Время чтения всех линеек с конфликтами",
+                "total_no_conflict_time_ns": "Время чтения всех линеек без конфликтов",
+                "avg_conflict_time_ns": "Среднее время обращения с конфликтами",
+                "avg_no_conflict_time_ns": "Среднее время обращения без конфликтов",
                 "conflict_to_no_conflict_ratio": "Отношение времени",
+                "conflict_threshold_lines": "Конфликты начинаются с (линеек)",
             }
         },
         6: {
@@ -200,6 +210,7 @@ Radix-Counting показывает лучшие результаты на бо�
                 "total_radix_opt_us": "Общее время Radix-Counting (оптим.)",
                 "quicksort_to_radix_ratio": "QuickSort/Radix-Counting",
                 "quicksort_to_radix_opt_ratio": "QuickSort/Radix-Counting (оптим.)",
+                "radix_to_radix_opt_ratio": "Radix-Counting/Radix-Counting (оптим.)",
             }
         },
         7: {
@@ -346,6 +357,11 @@ Speedup показывает отношение времени Branch к вре�
                 elif line == "Результаты:":
                     current_section = "results"
                     continue
+                elif line == "PMU метрики:":
+                    # PMU метрики в таблицу результатов не попадают: у них свой график,
+                    # а категории (list/array и т.п.) при разборе перезаписывали бы друг друга
+                    current_section = None
+                    continue
                 
                 # Парсим ключ-значение
                 if current_exp and current_section and ': ' in line:
@@ -368,6 +384,9 @@ Speedup показывает отношение времени Branch к вре�
     
     def _format_value(self, key: str, value: Any) -> str:
         """Форматирует значение для отображения."""
+        # Количество банков — безразмерное (иначе ключ estimated_banks попал бы под "_b" — байты)
+        if "banks" in key and isinstance(value, (int, float)):
+            return str(int(value))
         # Сначала проверяем суффикс ключа для определения единиц измерения
         if "_us" in key:
             if isinstance(value, (int, float)):
