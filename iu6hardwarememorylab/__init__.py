@@ -10,7 +10,6 @@ IU6 Hardware Memory Lab
 
 from .hardware_client import (
     HardwareTesterClient,
-    MCUClient,
     ServerInfo,
     NetworkInterface,
     run_experiment
@@ -26,7 +25,6 @@ __author__ = "IU6"
 
 __all__ = [
     "HardwareTesterClient",
-    "MCUClient",
     "ServerInfo",
     "NetworkInterface",
     "run_experiment",

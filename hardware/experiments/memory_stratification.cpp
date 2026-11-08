@@ -211,7 +211,12 @@ std::string memoryStratificationExperiment(const std::string& params) {
     if (maxTimeStep > 0) {
         pageSize = maxTimeStep / numBanks;
     }
-    
+
+    // Количество страниц DRAM: С = О / РС. В методичке записано С = О/(РС·Б·П),
+    // но РС уже задан в байтах, и лишние множители Б и П дают число меньше единицы
+    size_t physicalMemory = getPhysicalMemoryBytes();
+    size_t pageCount = (pageSize > 0) ? physicalMemory / pageSize : 0;
+
     // Формирование JSON результата
     std::ostringstream json;
     json << "{";
@@ -228,6 +233,7 @@ std::string memoryStratificationExperiment(const std::string& params) {
     json << "\"stepSize_bytes\":" << stepSize << ",";
     json << "\"arraySize_bytes\":" << arraySize << ",";
     json << "\"llc_bytes\":" << llcSize << ",";
+    json << "\"physical_memory_bytes\":" << physicalMemory << ",";
     json << "\"repeats\":" << NUM_ITERATIONS;
     json << "},";
     
@@ -239,6 +245,7 @@ std::string memoryStratificationExperiment(const std::string& params) {
     json << "\"T2_time_us\":" << maxTime << ",";
     json << "\"estimated_banks\":" << numBanks << ",";
     json << "\"estimated_page_size_bytes\":" << pageSize << ",";
+    json << "\"estimated_pages\":" << pageCount << ",";
     json << "\"significant_peaks_bytes\":[";
     for (size_t i = 0; i < peaks.size() && i < STRATIFICATION_MAX_PEAKS; i++) {
         if (i > 0) json << ",";

@@ -2,11 +2,13 @@
 #define FUNCTIONS_HPP
 
 #include "experiments/common.hpp"
+#include "experiments/cpu_info.cpp"
 #include "experiments/memory_stratification.cpp"
 #include "experiments/list_vs_array.cpp"
 #include "experiments/prefetch.cpp"
 #include "experiments/memory_read_optimization.cpp"
 #include "experiments/cache_conflicts.cpp"
+#include "experiments/cache_performance.cpp"
 #include "experiments/sorting_algorithms.cpp"
 #include "experiments/self_modifying.cpp"
 
@@ -15,6 +17,13 @@
  * Вызывается при старте сервера для регистрации всех доступных функций
  */
 void initializeFunctions() {
+    // Идентификация процессора (задания 1–2 методички)
+    functionRegistry.registerFunction(
+        "cpu_info",
+        "Идентификация процессора: модель, кэш всех уровней, TLB, объём памяти. Параметров нет",
+        cpuInfoExperiment
+    );
+    
     // Регистрация эксперимента исследования расслоения памяти
     functionRegistry.registerFunction(
         "memory_stratification",
@@ -48,6 +57,13 @@ void initializeFunctions() {
         "cache_conflicts",
         "Исследование конфликтов в кэш-памяти. Параметры: param1 (0=авто или 1-256 КБ банк), param2 (0=авто или 1-128 Б линейка), param3 (2-512 линеек)",
         cacheConflictsExperiment
+    );
+    
+    // Производительность кэш-памяти
+    functionRegistry.registerFunction(
+        "cache_performance",
+        "Исследование производительности кэш-памяти. Параметры: param1 (1-1048576 КБ наибольший блок), param2 (1-4096 Б шаг)",
+        cachePerformanceExperiment
     );
     
     // Алгоритмы сортировки

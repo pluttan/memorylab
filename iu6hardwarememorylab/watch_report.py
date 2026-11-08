@@ -3,7 +3,7 @@
 Скрипт для автоматической перекомпиляции отчёта при изменении файлов.
 
 Отслеживает:
-- report/results.txt - перегенерирует main.typ и компилирует PDF
+- report/results.txt и report/cpu_info.json - перегенерирует main.typ и компилирует PDF
 - report/img/ - компилирует PDF
 - report/main.typ и другие .typ файлы - компилирует PDF
 """
@@ -139,18 +139,19 @@ class ReportWatcher(FileSystemEventHandler):
             
         path = Path(event.src_path)
         
+        # .report_config.json изменён → перегенерировать и скомпилировать.
+        # Проверка стоит до отсева скрытых файлов: имя конфига начинается с точки
+        if path.name == ".report_config.json":
+            self._log("Конфигурация изменена -> перегенерация main.typ...")
+            self._regenerate_and_compile()
+            return
+        
         # Игнорируем временные файлы
         if path.suffix in ('.swp', '.tmp', '~') or path.name.startswith('.'):
             return
         
-        # results.txt изменён → перегенерировать и скомпилировать
-        if path == self.results_file:
-            self._regenerate_and_compile()
-            return
-
-        # .report_config.json изменён → перегенерировать и скомпилировать
-        if path.name == ".report_config.json":
-            self._log("Конфигурация изменена -> перегенерация main.typ...")
+        # results.txt или сведения о процессоре изменены → перегенерировать и скомпилировать
+        if path == self.results_file or path == self.report_dir / "cpu_info.json":
             self._regenerate_and_compile()
             return
         

@@ -9,35 +9,35 @@
 # Из корня проекта:
 
 # 1. Установить PlatformIO (если не установлен)
-make pio-install
+make -f mcu.mk pio-install
 
 # 2. Собрать для ESP32 (по умолчанию)
-make pio-build
+make -f mcu.mk pio-build
 
 # 3. Загрузить на плату
-make pio-upload
+make -f mcu.mk pio-upload
 
 # 4. Открыть UART-монитор
-make pio-monitor
+make -f mcu.mk pio-monitor
 ```
 
 ### Выбор платформы
 
 ```bash
 # STM32 Black Pill
-make pio-build PIO_ENV=stm32f411
+make -f mcu.mk pio-quick PIO_ENV=stm32f411
 
 # Arduino Uno
-make pio-build PIO_ENV=uno
+make -f mcu.mk pio-quick PIO_ENV=uno
 
 # ESP8266 NodeMCU
-make pio-build PIO_ENV=esp8266
+make -f mcu.mk pio-quick PIO_ENV=esp8266
 
 # Raspberry Pi Pico
-make pio-build PIO_ENV=pico
+make -f mcu.mk pio-quick PIO_ENV=pico
 
 # Список всех плат
-make pio-boards
+make -f mcu.mk pio-boards
 ```
 
 ## Поддерживаемые платформы
@@ -131,13 +131,13 @@ hardware-mc/
 
 ```bash
 # 1. Загрузить прошивку
-make pio
+make -f mcu.mk pio
 
 # 2. Запустить UART-сервер + Jupyter Lab
-make mcu-run
+make -f mcu.mk mcu-run
 
 # Или только UART-сервер (интерактивный выбор порта)
-make server-mcu
+make -f mcu.mk server-mcu
 ```
 
 В Jupyter используется тот же клиент что и для desktop-версии:

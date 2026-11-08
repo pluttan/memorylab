@@ -8,6 +8,7 @@ IU6 Hardware Memory Lab - Report Generator
 Кафедра ИУ-6, МГТУ им. Н.Э. Баумана
 """
 
+import json
 import os
 import re
 from pathlib import Path
@@ -17,8 +18,24 @@ from rich.console import Console
 from rich.panel import Panel
 from rich import box
 
+# Пакет импортирует модуль относительно, запуск файлом — напрямую
+try:
+    from .cpu_cache import (CACHE_HEADERS, CPU_INFO_FILE, TLB_HEADERS, TLB_MISSING,
+                            cache_rows, format_bytes, tlb_rows)
+except ImportError:
+    from cpu_cache import (CACHE_HEADERS, CPU_INFO_FILE, TLB_HEADERS, TLB_MISSING,
+                           cache_rows, format_bytes, tlb_rows)
+
 # Глобальный экземпляр консоли для красивого вывода
 console = Console()
+
+# Символы разметки Typst, которые в тексте нужно экранировать
+TYPST_SPECIAL = set('\\#$*_@<>[]`~')
+
+
+def typst_escape(text: str) -> str:
+    """Экранирует разметку Typst в произвольной строке (например, в названии процессора)."""
+    return "".join("\\" + ch if ch in TYPST_SPECIAL else ch for ch in str(text))
 
 
 class ReportGenerator:
@@ -52,12 +69,14 @@ class ReportGenerator:
 - *Точка T1* — первый локальный экстремум, соответствует минимальному шагу чтения при постоянном обращении к одному банку
 - *Точка T2* — глобальный экстремум, наихудший шаг при обращении к памяти (постоянное открытие/закрытие страниц)
 - Количество банков: Б = T1/П, где П — размер линейки кэш-памяти
-- Размер страницы: РС = T2/Б""",
+- Размер страницы: РС = T2/Б
+- Количество страниц: С = О/РС, где О обозначает объём физической памяти""",
             "img_name": "exp1_memory_stratification",
             "param_labels": {
                 "param1_kb": "Максимальное расстояние",
                 "param2_b": "Шаг увеличения расстояния",
                 "param3_mb": "Размер массива",
+                "physical_memory_bytes": "Объём физической памяти",
             },
             "result_labels": {
                 "T1_step_bytes": "Точка T1 (первый максимум)",
@@ -66,6 +85,7 @@ class ReportGenerator:
                 "T2_time_us": "Время в точке T2",
                 "estimated_banks": "Количество банков памяти",
                 "estimated_page_size_bytes": "Размер страницы памяти",
+                "estimated_pages": "Количество страниц памяти (О/РС)",
                 "significant_peaks_bytes": "Значимые пики (шаг, байт)",
             }
         },
@@ -186,6 +206,42 @@ class ReportGenerator:
             }
         },
         6: {
+            "title": "Исследование производительности кэш-памяти",
+            "goal": "Выявление архитектурных особенностей кэш-памяти: определение объёма кэш-памяти данных каждого уровня.",
+            "problem": """Кэш-память каждого уровня хранит ограниченный объём данных. Пока обрабатываемый блок 
+помещается в кэш, обращения к нему обслуживает этот уровень. Когда блок превышает объём кэша, 
+линейки вытесняются и читаются с более медленного уровня, и время обработки растёт.""",
+            "method": """Размер блока растёт от параметра 2 до параметра 1. Для каждого размера блок обрабатывается в четырёх режимах:
+1) последовательное чтение;
+2) последовательная запись;
+3) чтение и запись каждого элемента;
+4) запись всего блока, затем чтение всего блока.
+
+Замеряется время обработки одного килобайта блока. Обращение выполняется одно на линейку кэша: 
+при обращении к каждому слову скорость ограничивает число команд, а не кэш.""",
+            "analysis": """Красным цветом показано чтение, зелёным запись, фиолетовым чтение с записью, синим запись с последующим чтением.
+Пока блок помещается в кэш, время на килобайт постоянно. Каждая ступень графика соответствует объёму 
+очередного уровня кэш-памяти. Серые вертикальные линии отмечают объёмы кэша по данным операционной системы.""",
+            "img_name": "exp6_cache_performance",
+            "param_labels": {
+                "param1_kb": "Наибольший размер блока",
+                "param2_b": "Шаг приращения размера блока",
+                "cache_line_bytes": "Размер линейки кэша",
+                "points": "Количество точек",
+                "repeats": "Повторов замера",
+            },
+            "result_labels": {
+                "step1_bytes": "Ступень 1 (оценка L1)",
+                "step2_bytes": "Ступень 2 (оценка L2)",
+                "step3_bytes": "Ступень 3 (оценка L3)",
+                "os_l1_bytes": "Объём L1 по данным ОС",
+                "os_l2_bytes": "Объём L2 по данным ОС",
+                "os_l3_bytes": "Объём L3 по данным ОС",
+                "min_read_ns_per_kb": "Наименьшее время чтения 1 КБ",
+                "max_read_ns_per_kb": "Наибольшее время чтения 1 КБ",
+            }
+        },
+        7: {
             "title": "Сравнение алгоритмов сортировки",
             "goal": "Исследование способов эффективного использования памяти и выявление наиболее эффективных алгоритмов сортировки.",
             "problem": """Алгоритм QuickSort имеет сложность O(n·log(n)) в среднем. Алгоритмы без парных сравнений 
@@ -199,7 +255,7 @@ Radix-Counting алгоритм имеет сложность O(n/log(n)), т.е
 3) Radix-Counting Sort (оптим.) — версия для 8-процессорной системы""",
             "analysis": """Фиолетовый график — QuickSort, красный — Radix-Counting, зелёный — оптимизированный Radix-Counting.
 Radix-Counting показывает лучшие результаты на больших массивах.""",
-            "img_name": "exp6_sorting_algorithms",
+            "img_name": "exp7_sorting_algorithms",
             "param_labels": {
                 "param1_m": "Количество элементов",
                 "param2_k": "Шаг увеличения размера",
@@ -213,7 +269,7 @@ Radix-Counting показывает лучшие результаты на бо�
                 "radix_to_radix_opt_ratio": "Radix-Counting/Radix-Counting (оптим.)",
             }
         },
-        7: {
+        8: {
             "title": "Исследование самомодифицирующегося кода (JIT vs Branching)",
             "goal": "Исследование влияния самомодифицирующегося кода и JIT-компиляции на производительность рендеринга.",
             "problem": """Современные процессоры используют конвейерную обработку (pipelining). При условном переходе 
@@ -235,7 +291,7 @@ Radix-Counting показывает лучшие результаты на бо�
 - Лучшей предсказуемости переходов
 
 Speedup показывает отношение времени Branch к времени JIT — чем выше, тем эффективнее JIT.""",
-            "img_name": "exp7_doom_jit_benchmark",
+            "img_name": "exp8_doom_jit_benchmark",
             "param_labels": {
                 "source": "Источник данных",
                 "total_entries": "Количество записей",
@@ -521,6 +577,7 @@ Speedup показывает отношение времени Branch к вре�
 + Исследование эффективности программной предвыборки;
 + Оптимизация чтения оперативной памяти;
 + Исследование конфликтов в кэш-памяти;
++ Исследование производительности кэш-памяти;
 + Сравнение алгоритмов сортировки;
 + Исследование самомодифицирующегося кода (JIT vs Branching).
 
@@ -628,9 +685,53 @@ Speedup показывает отношение времени Branch к вре�
     def _generate_experiments(self) -> str:
         """Генерирует секции всех экспериментов."""
         content = ""
-        for num in range(1, 8):
+        for num in sorted(self.EXPERIMENTS):
             content += self._generate_experiment_section(num)
         return content
+    
+    def _typst_table(self, headers: List[str], rows: List[List[str]], caption: str) -> str:
+        """Таблица Typst с заголовком из жирных ячеек."""
+        table = f'''#таблица(table(
+  columns: {len(headers)},
+'''
+        table += "  " + ", ".join(f"[ *{typst_escape(h)}* ]" for h in headers) + ",\n"
+        for row in rows:
+            table += "  " + ", ".join(f"[ {typst_escape(cell)} ]" for cell in row) + ",\n"
+        return table + f"))[ {caption} ]\n\n"
+    
+    def _generate_cpu_section(self) -> str:
+        """Раздел «Идентификация процессора» по файлу cpu_info.json (методичка: в конце отчёта)."""
+        path = self.report_dir / CPU_INFO_FILE
+        section = '''
+// ==================== ИДЕНТИФИКАЦИЯ ПРОЦЕССОРА ====================
+= Идентификация процессора
+
+'''
+        if not path.exists():
+            return section + "// TODO: Выполните ячейку «Идентификация процессора» в тетради\n\n"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        cpu = data.get("cpu", {})
+        memory = data.get("memory", {})
+        summary = [
+            ["Производитель", cpu.get("vendor") or "—"],
+            ["Модель", cpu.get("brand") or "—"],
+            ["Архитектура", cpu.get("arch", "—")],
+            ["Логических процессоров", str(cpu.get("logical_cpus", "—"))],
+            ["Объём физической памяти", format_bytes(memory.get("physical_bytes", 0))],
+            ["Размер страницы памяти", format_bytes(memory.get("page_size_bytes", 0))],
+            ["Размер линейки кэша", f"{memory.get('cache_line_bytes', '—')} Б"],
+        ]
+        if cpu.get("family"):
+            summary.insert(3, ["Семейство / модель / степпинг",
+                               f"{cpu['family']} / {cpu['model']} / {cpu['stepping']}"])
+        section += self._typst_table(["Параметр", "Значение"], summary, "Сведения о процессоре")
+        section += self._typst_table(CACHE_HEADERS, cache_rows(data.get("caches", [])), "Кэш-память")
+        tlbs = data.get("tlb", [])
+        if tlbs:
+            section += self._typst_table(TLB_HEADERS, tlb_rows(tlbs), "Буферы TLB")
+        else:
+            section += typst_escape(TLB_MISSING) + "\n\n"
+        return section
     
     def _generate_conclusion(self) -> str:
         """Генерирует заключение."""
@@ -690,6 +791,7 @@ Speedup показывает отношение времени Branch к вре�
         content += self._generate_toc()
         content += self._generate_introduction()
         content += self._generate_experiments()
+        content += self._generate_cpu_section()
         content += self._generate_conclusion()
         
         # Записываем файл

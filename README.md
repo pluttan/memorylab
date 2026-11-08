@@ -6,15 +6,17 @@
 
 </div>
 
-An automated system for the BMSTU ИУ-6 computer memory hierarchy lab. A hand-rolled C++ WebSocket server (`HardwareTester`) runs seven cache/memory experiments on the host CPU, a Python client driven from a Jupyter notebook collects and plots the results, and a Typst pipeline generates and live-recompiles the PDF report. A bundled Chocolate DOOM build is used as a JIT vs. branching cache-load workload for the self-modifying-code experiment.
+An automated system for the BMSTU ИУ-6 computer memory hierarchy lab. A hand-rolled C++ WebSocket server (`HardwareTester`) identifies the CPU (caches, TLB, memory) and runs eight cache/memory experiments on the host CPU, a Python client driven from a Jupyter notebook collects and plots the results, and a Typst pipeline generates and live-recompiles the PDF report. A bundled Chocolate DOOM build is used as a JIT vs. branching cache-load workload for the self-modifying-code experiment.
 
 ## ■ Features
 
-- ❖ **Memory stratification** — detect L1/L2/L3 cache sizes experimentally
+- ❖ **CPU identification** — CPUID dump with cache levels, associativity, TLB and physical memory
+- ❖ **DRAM interleaving** — number of banks, page size and page count of DRAM
 - ❖ **List vs array** — compare access time for linked lists and arrays
 - ❖ **Prefetch analysis** — measure the effect of software prefetching
 - ❖ **Read optimization** — multithreaded sequential memory read scaling
 - ❖ **Cache conflicts** — study the impact of set associativity and bank/line geometry
+- ❖ **Cache performance** — L1/L2/L3 sizes from the steps of read/write time vs. block size
 - ❖ **Sorting benchmarks** — compare algorithm performance with cache effects
 - ❖ **Self-modifying code** — JIT vs. branching, benchmarked against a live DOOM run
 - ❖ **Auto-report** — Typst PDF generation with `watchdog` file-watch and auto-recompilation
@@ -40,7 +42,7 @@ An automated system for the BMSTU ИУ-6 computer memory hierarchy lab. A hand-r
 
 ```
 1. `make all` installs dependencies via vcpkg, builds the C++ HardwareTester server and Chocolate DOOM.
-2. The HardwareTester WebSocket server starts and executes seven cache/memory experiments on the host CPU.
+2. The HardwareTester WebSocket server starts, identifies the CPU and executes eight cache/memory experiments on the host CPU.
 3. The Python client connects over WebSocket from Jupyter Lab, collects results, and plots them with matplotlib/numpy.
 4. Typst watches the output directory via watchdog and live-recompiles the PDF lab report on every change.
 ```
@@ -53,7 +55,11 @@ cd memorylab
 make all     # full setup: deps, build, report, DOOM, Jupyter Lab
 make run     # start server + DOOM + Jupyter Lab
 make stop    # stop all processes
+make clean  # delete student results: plots, logs, results.txt, PDF
+make distclean  # delete everything make all installed and built
 ```
+
+Microcontroller firmware (`hardware-mc/`) and the UART bridge live in a separate makefile that `make all` does not touch: `make -f mcu.mk help`.
 
 ## ■ License
 

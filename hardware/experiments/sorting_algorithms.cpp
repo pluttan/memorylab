@@ -92,10 +92,10 @@ std::string sortingAlgorithmsExperiment(const std::string& params) {
     
     prepareForMeasurement();
     
-    printf("\n[EXP6] ========== sorting_algorithms ==========\n");
-    printf("[EXP6] Параметры: param1=%d М, param2=%d К\n", param1, param2);
-    printf("[EXP6] maxElements=%zu, stepElements=%zu\n", maxElements, stepElements);
-    printf("[EXP6] Всего шагов: %zu\n", maxElements / stepElements);
+    printf("\n[EXP7] ========== sorting_algorithms ==========\n");
+    printf("[EXP7] Параметры: param1=%d М, param2=%d К\n", param1, param2);
+    printf("[EXP7] maxElements=%zu, stepElements=%zu\n", maxElements, stepElements);
+    printf("[EXP7] Всего шагов: %zu\n", maxElements / stepElements);
     fflush(stdout);
     
     for (size_t numElements = stepElements; numElements <= maxElements; numElements += stepElements) {
