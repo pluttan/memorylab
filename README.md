@@ -61,6 +61,8 @@ make distclean  # delete everything make all installed and built
 
 Microcontroller firmware (`hardware-mc/`) and the UART bridge live in a separate makefile that `make all` does not touch: `make -f mcu.mk help`.
 
+Each experiment has a short manim film that shows what the program does to memory and why the graph looks the way it does: see `films/README.md`, build with `make -C films films`.
+
 ## ■ License
 
 GPL-2.0 © [pluttan](https://github.com/pluttan)

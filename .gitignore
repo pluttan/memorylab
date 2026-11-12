@@ -98,3 +98,7 @@ doom_src/HTML/
 doom_src/.cache/clangd
 doom_src/compile_commands.json
 jit_benchmark.csv
+
+# Films (films/Makefile)
+films/venv/
+films/out/
