@@ -78,7 +78,7 @@ PRETTY_RAW = python3 iu6hardwarememorylab/pretty_print.py
 # Форматирование вывода (fallback)
 LINE = ========================================
 
-.PHONY: all server jupyter notebook build clean distclean help stop venv deps kill-server kill-port logs report report-setup report-watch report-generate report-compile typst-install clean-report run start
+.PHONY: all server jupyter notebook build clean distclean help stop venv deps kill-server kill-port logs report report-setup report-watch report-generate report-compile typst-install clean-report run start collect
 
 # По умолчанию показываем помощь
 help:
@@ -93,6 +93,7 @@ help:
 	@echo " make doom-run   - Запустить DOOM"
 	@echo " make run      - Запустить сервер, DOOM и lab"
 	@echo " make start    - Запустить сервер и lab вместе (без DOOM)"
+	@echo " make collect  - Прогнать все эксперименты без Jupyter, архив results-*.tgz"
 	@echo " make venv     - Создать виртуальное окружение"
 	@echo " make deps     - Установить зависимости Python"
 	@echo " make stop     - Остановить все процессы"
@@ -194,6 +195,19 @@ start: build deps kill-server $(LOG_DIR) $(IMG_DIR)
 	$(PRETTY) success "URL: http://localhost:$(JUPYTER_PORT)"; \
 	$(PRETTY) info "Log: $(JUPYTER_LOG)"; \
 	cd $(TEST_DIR) && ./../$(PYTHON) -m jupyter lab --port=$(JUPYTER_PORT) > ../$(JUPYTER_LOG) 2>&1
+
+# All experiments with the notebook parameters and no Jupyter, for computers we only get
+# numbers from: results-<host>-<date>.tgz with JSON, plots and summary.json
+collect: build deps kill-server $(LOG_DIR)
+	@(cd $(HARDWARE_DIR) && exec ./server > ../$(SERVER_LOG) 2>&1) & \
+	SERVER_PID=$$!; \
+	trap 'kill $$SERVER_PID 2>/dev/null' EXIT INT TERM; \
+	sleep 1; \
+	if ! kill -0 $$SERVER_PID 2>/dev/null; then \
+		$(PRETTY) error "Сервер не запустился, см. $(SERVER_LOG)"; \
+		exit 1; \
+	fi; \
+	$(PYTHON) -m iu6hardwarememorylab.collect
 
 DOOM_DIR = doom_src
 DOOM_BUILD_DIR = $(DOOM_DIR)/build

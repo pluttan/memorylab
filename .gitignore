@@ -99,6 +99,10 @@ doom_src/.cache/clangd
 doom_src/compile_commands.json
 jit_benchmark.csv
 
+# make collect
+/results/
+results-*.tgz
+
 # Films (films/Makefile)
 films/venv/
 films/out/

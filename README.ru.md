@@ -57,6 +57,7 @@ make run     # запустить сервер + DOOM + Jupyter Lab
 make stop    # остановить все процессы
 make clean  # удалить результаты студента: графики, логи, results.txt, PDF
 make distclean  # удалить всё, что ставит и собирает make all
+make collect # прогнать все эксперименты без Jupyter и собрать архив results-*.tgz
 ```
 
 Прошивка микроконтроллера (`hardware-mc/`) и UART-мост собираются отдельным файлом, его `make all` не трогает: `make -f mcu.mk help`.

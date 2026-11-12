@@ -57,6 +57,7 @@ make run     # start server + DOOM + Jupyter Lab
 make stop    # stop all processes
 make clean  # delete student results: plots, logs, results.txt, PDF
 make distclean  # delete everything make all installed and built
+make collect # run every experiment without Jupyter and pack results-*.tgz
 ```
 
 Microcontroller firmware (`hardware-mc/`) and the UART bridge live in a separate makefile that `make all` does not touch: `make -f mcu.mk help`.
