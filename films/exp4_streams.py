@@ -72,8 +72,7 @@ class Exp4Streams(Film):
     # --- separate arrays --------------------------------------------------
 
     def separate(self, r):
-        self.prog = code(['for (a = 0; a < n; a++)', '    for (b = 0; b < r; b++)', '        x += px[b][a];'],
-                         -6.55, -0.2)
+        self.prog = code(self.listing(r), -6.55, -0.2)
         self.strips = VGroup(*[self.strip(k) for k in range(r)])
         appear = LaggedStart(*[show(st, lag=0.1) for st in self.strips], show(self.prog, lag=0.2), lag_ratio=0.15)
         self.say('Неоптимизированная структура: r отдельных массивов в разных местах памяти.',
@@ -91,11 +90,16 @@ class Exp4Streams(Film):
         self.wait(1.5)
         self.dots = VGroup(dot)
 
+    @staticmethod
+    def listing(r):
+        return ['for (a = 0; a < n; a++)', (f'    for (b = 0; b < {r}; b++)', YELLOW), '        x += px[b][a];']
+
     def separate_more(self, r):
         more = VGroup(*[self.strip(k) for k in range(len(self.strips), r)])
+        self.prog, recode = self.recode(self.prog, self.listing(r), -6.55, -0.2)
         self.say(f'При r = {r} потоков больше, чем ячеек предвыборки. Лишние массивы ждут память.',
                  'Каждый поток к тому же держит открытой свою строку памяти.', hold=0,
-                 extra=[LaggedStart(*[show(st, lag=0.1) for st in more], lag_ratio=0.3)], run_time=1)
+                 extra=[LaggedStart(*[show(st, lag=0.1) for st in more], lag_ratio=0.3), *recode], run_time=1)
         self.strips.add(*more)
         for i in range(4, 8):
             reads = [self.strips[k][0][i].animate.set_fill(COLORS[k] if k < TRACKED else RED, 0.85)
@@ -110,7 +114,7 @@ class Exp4Streams(Film):
     # --- interleaved array ------------------------------------------------
 
     def together(self, r):
-        self.prog = code(['for (a = 0; a < n * r; a += r)', '    for (b = 0; b < r; b++)',
+        self.prog = code([(f'for (a = 0; a < n * {r}; a += {r})', YELLOW), (f'    for (b = 0; b < {r}; b++)', YELLOW),
                           '        x += p[a + b];'], -6.55, -0.2)
         n = 4
         cw = 0.16

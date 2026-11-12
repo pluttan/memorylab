@@ -266,6 +266,18 @@ class Film(Scene):
         if hold > 0:
             self.wait(hold)
 
+    def recode(self, prog, lines, x, y, **kw):
+        """A listing with new lines in place of `prog`: changed lines roll over, the rest stay.
+        Returns the new listing and the animations."""
+        new = code(lines, x, y, **kw)
+        anims = []
+        for i, (old, line) in enumerate(zip(prog, new)):
+            if old.text == line.text and old.get_color() == line.get_color():
+                new.submobjects[i] = old
+            else:
+                anims += roll(old, line, dy=0.2)
+        return new, anims
+
     def frame(self, mob, color=HL, buff=0.08):
         return SurroundingRectangle(mob, color=color, buff=buff, corner_radius=0.08, stroke_width=3).set_z_index(8)
 

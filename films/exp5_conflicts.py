@@ -8,7 +8,8 @@ from manim import (LEFT, RIGHT, UP, AnimationGroup, Create, FadeIn, FadeOut, Ind
                    there_and_back)
 
 sys.path.insert(0, str(Path(__file__).parent))
-from common import (DIM, GREEN, HL, RED, SURF, TEXT, Film, Plot, blink, cell, code, draw, pop, show, txt)
+from common import (DIM, GREEN, HL, RED, SURF, TEXT, YELLOW, Film, Plot, blink, cell, code, draw, pop, show,  # noqa: E402
+                    txt)
 from model import Cache, conflict_time  # noqa: E402
 
 CACHE = Cache()
@@ -60,8 +61,7 @@ class Exp5Conflicts(Film):
         column = VGroup(*[row[0] for row in self.cells])
         self.spot([column], 'Банк кэша: один путь всех наборов. Здесь 8 линеек по 64 байта, 512 байт.',
                   'Адреса, которые отстоят на банк, попадают в один набор.')
-        self.prog = code(['for (r = 0; r < rounds; r++)', '    for (k = 0; k < n; k++)',
-                          '        x += p[k * step];'], CX0 - 0.95, -1.15)
+        self.prog = code(self.listing('step'), CX0 - 0.95, -1.15)
         self.play(show(self.prog, lag=0.2), run_time=0.7)
 
     def draw_plot(self):
@@ -88,14 +88,21 @@ class Exp5Conflicts(Film):
         return AnimationGroup(lab.animate(path_arc=0.3).move_to(cell_), cell_.animate.set_fill(color, 0.35),
                               lag_ratio=0.5)
 
+    @staticmethod
+    def listing(step):
+        lit = YELLOW if isinstance(step, int) else TEXT
+        return ['for (r = 0; r < rounds; r++)', '    for (k = 0; k < n; k++)', (f'        x += p[k * {step}];', lit)]
+
     def run(self, stride, n, color, notes):
         """Read n lines at this stride twice, LRU in every set."""
+        self.prog, recode = self.recode(self.prog, self.listing(stride), CX0 - 0.95, -1.15)
         sets = [[] for _ in range(CACHE.sets)]          # (line, way), oldest first
         notes = dict((k, (a, b)) for k, a, b in notes)
         for rnd in range(2):
             for k in range(n):
                 if rnd == 0 and k + 1 in notes:
-                    self.say(*notes[k + 1], hold=0)
+                    self.say(*notes[k + 1], hold=0, extra=recode)
+                    recode = []
                 s = CACHE.set_of(k * stride)
                 hit = any(line == k for line, _ in sets[s])
                 if hit:

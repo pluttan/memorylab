@@ -18,6 +18,7 @@ ROW_Y = [1.9, 1.48, 1.06, 0.64]
 BUF_Y = 2.47
 STEPS = list(range(64, 4097, 64))
 T1, T2 = DRAM.banks * DRAM.line, DRAM.banks * DRAM.cols * DRAM.line
+CODE_AT = (-6.3, -1.1)
 
 
 class Exp1Dram(Film):
@@ -108,9 +109,7 @@ class Exp1Dram(Film):
         self.play(hide(queue), run_time=0.5)
 
     def draw_code_and_plot(self):
-        self.code = code(['for (b = 0; b < step; b += 64)',
-                          '    for (a = b; a < size; a += step)',
-                          '        x += p[a];'], -6.3, -1.1, size=16)
+        self.code = code(self.listing('step'), *CODE_AT, size=16)
         self.plot = Plot(1.0, -2.45, 5.85, 4.7, (0, 4096), (0, 6500), 'шаг, байт', 'время чтения массива',
                          xticks=[(256, '256'), (1024, '1024'), (2048, '2048'), (3072, '3072'), (4096, '4096')])
         self.play(show(self.code, lag=0.15), self.plot.appear(), run_time=1.4)
@@ -119,11 +118,19 @@ class Exp1Dram(Film):
 
     # --- one stride -------------------------------------------------------
 
+    @staticmethod
+    def listing(step):
+        """The experiment loop; a number in place of step is lit in the colour of the reads."""
+        lit = PEACH if isinstance(step, int) else TEXT
+        return [(f'for (b = 0; b < {step}; b += 64)', lit), (f'    for (a = b; a < size; a += {step})', lit),
+                '        x += p[a];']
+
     def demo(self, step, line, second, reads=8):
         """The first reads of the loop at this stride: reads that run at once light up together."""
         addrs = stratification_reads(DRAM, step, inner=reads)
         groups = self.waves(addrs)
-        self.say(line, second, hold=0)
+        self.code, recode = self.recode(self.code, self.listing(step), *CODE_AT, size=16)
+        self.say(line, second, hold=0, extra=recode)
         lit = []
         for group in groups:
             anims = []
@@ -186,9 +193,10 @@ class Exp1Dram(Film):
 
     def full_curve(self):
         line = self.plot.curve(STEPS, [self.curve[s] for s in STEPS], PEACH, width=2.5)
+        self.code, recode = self.recode(self.code, self.listing('step'), *CODE_AT, size=16)
         self.say('Так программа проходит все шаги от 64 байт до 4 КБ.',
                  'Пики стоят на шагах, кратных T1, и растут до T2. После T2 пики не растут.',
-                 extra=[Create(line, run_time=3)], run_time=3)
+                 extra=[Create(line, run_time=3), *recode], run_time=3)
         self.play(FadeOut(self.dots, scale=0.3), run_time=0.4)
 
     def formulas(self):
