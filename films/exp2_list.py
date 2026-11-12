@@ -4,10 +4,11 @@ import sys
 from pathlib import Path
 
 import numpy as np
-from manim import PI, Create, CurvedArrow, Dot, MoveAlongPath, VGroup
+from manim import PI, AnimationGroup, Create, CurvedArrow, Dot, FadeOut, LaggedStart, MoveAlongPath, VGroup
 
 sys.path.insert(0, str(Path(__file__).parent))
-from common import (BLUE, DIM, GREEN, HL, PEACH, RED, SUB, SURF, YELLOW, Fade, Film, Plot, cell, code, txt)  # noqa: E402
+from common import (BLUE, DIM, GREEN, HL, LINE, PEACH, RED, SUB, SURF, YELLOW, Film, Plot, cell, code, draw,  # noqa: E402
+                    hide, pop, show, txt)
 from model import LINE, NODE, PAGE, list_curve  # noqa: E402
 
 CW, CH = 0.37, 0.42             # one 16-byte element
@@ -21,8 +22,6 @@ class Exp2List(Film):
 
     def story(self):
         self.lst, self.arr = list_curve(DISTS)
-        self.say('Опыт ищет максимум в массиве и в списке из того же числа элементов.',
-                 'Список читается дольше. Опыт показывает, во сколько раз и почему.')
         self.draw_memory()
         self.draw_plot()
         self.array_demo()
@@ -47,7 +46,10 @@ class Exp2List(Film):
             self.lines.add(cell((a[0] + b[0]) / 2, a[1], 4 * CW, CH + 0.14, SURF, opacity=0, stroke=DIM))
         ticks = VGroup(*[txt(f'{k * NODE}', 11, DIM).move_to(self.pos(k) + (0, CH / 2 + 0.2, 0))
                          for k in range(0, 2 * PER_ROW, 4)])
-        self.play(Create(self.lines), Create(self.cells), Fade(ticks, True), run_time=1.2)
+        appear = LaggedStart(show(self.lines, lag=0.1), show(self.cells, lag=0.03), show(ticks, lag=0.1),
+                             lag_ratio=0.3, run_time=2)
+        self.say('Опыт ищет максимум в массиве и в списке из того же числа элементов.',
+                 'Список читается дольше. Опыт показывает, во сколько раз и почему.', extra=[appear], run_time=2)
         self.ticks = ticks
         self.spot([self.lines[0]], 'Память отдаёт данные линейками по 64 байта.',
                   'В одну линейку входят четыре элемента по 16 байт. Сверху смещение в байтах.')
@@ -56,7 +58,7 @@ class Exp2List(Film):
         self.plot = Plot(1.0, -2.45, 5.85, 4.7, (16, 524288), (0, 10), 'фрагментация, байт', 'время',
                          xticks=[(16, '16'), (64, '64'), (1024, '1 К'), (4096, '4 К'), (65536, '64 К'),
                                  (524288, '512 К')], xlog=True)
-        self.play(Create(self.plot), run_time=1)
+        self.play(self.plot.appear(), run_time=1.2)
 
     def reset(self, extra=()):
         self.play(*[c.animate.set_fill(SURF, 1) for c in self.cells], *extra, run_time=0.4)
@@ -65,17 +67,18 @@ class Exp2List(Film):
 
     def array_demo(self):
         prog = code(['for (i = 0; i < n; i++)', '    if (max < arr[i]) max = arr[i];'], -6.55, -0.25)
-        self.play(Fade(prog, True), run_time=0.5)
+        self.play(show(prog, lag=0.2), run_time=0.6)
         self.say('Массив лежит подряд. Адрес следующего элемента известен заранее.',
                  'Процессор читает несколько элементов сразу, не дожидаясь первого.', hold=1.5)
         for line in range(4):
-            reads = [self.cells[4 * line + i].animate.set_fill(GREEN, 0.85) for i in range(4)]
+            reads = LaggedStart(*[self.cells[4 * line + i].animate.set_fill(GREEN, 0.85) for i in range(4)],
+                                lag_ratio=0.2)
             ahead = [self.lines[line + 1].animate.set_stroke(BLUE, 3)] if line < 3 else []
-            self.play(*reads, *ahead, run_time=0.35)
+            self.play(reads, *ahead, run_time=0.6)
         green = self.plot.curve(DISTS, self.arr, GREEN)
         self.say('Предвыборка заранее приносит следующую линейку, она горит синим.',
                  'Время массива не зависит от фрагментации: это зелёная линия.', extra=[Create(green)])
-        self.reset([ln.animate.set_stroke(DIM, 1.5) for ln in self.lines] + [Fade(prog, False)])
+        self.reset([ln.animate.set_stroke(DIM, 1.5) for ln in self.lines] + [hide(prog)])
         self.green = green
 
     # --- list -----------------------------------------------------------
@@ -85,11 +88,12 @@ class Exp2List(Film):
         if gap == 1:
             self.prog = code(['while ((node = node->next))',
                               '    if (max < node->val) max = node->val;'], -6.55, -0.25)
-            self.play(Fade(self.prog, True), run_time=0.5)
+            self.play(show(self.prog, lag=0.2), run_time=0.6)
+        self.say(line, second, hold=0)
         nodes = list(range(0, 2 * PER_ROW, gap))[:8]
         token = Dot(self.pos(nodes[0]), radius=0.09, color=YELLOW).set_z_index(5)
         arrows = VGroup()
-        self.play(Create(token), self.cells[nodes[0]].animate.set_fill(PEACH, 0.85), run_time=0.3)
+        self.play(pop(token), self.cells[nodes[0]].animate.set_fill(PEACH, 0.85), run_time=0.5)
         for a, b in zip(nodes, nodes[1:]):
             arc = CurvedArrow(self.pos(a) + (0, CH / 2, 0), self.pos(b) + (0, CH / 2, 0), angle=-PI / 2.2,
                               color=SUB, stroke_width=2, tip_length=0.12)
@@ -97,51 +101,60 @@ class Exp2List(Film):
                 arc = CurvedArrow(self.pos(a) + (0.1, -CH / 2, 0), self.pos(b) + (0, CH / 2, 0), angle=0,
                                   color=SUB, stroke_width=2, tip_length=0.12)
             arrows.add(arc)
-            miss = self.pos(a)[0] // 1 != self.pos(b)[0] // 1 and (b // 4 != a // 4)
-            color = RED if miss else PEACH
-            self.play(Create(arc), MoveAlongPath(token, arc), run_time=0.5 if miss else 0.3)
-            self.play(self.cells[b].animate.set_fill(color, 0.85), run_time=0.45 if miss else 0.15)
+            miss = b // 4 != a // 4
+            self.hop(token, arc, self.cells[b], RED if miss else PEACH, 0.9 if miss else 0.5)
         dist = gap * NODE
         dot = self.plot.dot(dist, self.lst[DISTS.index(dist)], RED)
-        self.say(line, second, extra=[Create(dot)])
+        self.play(pop(dot), run_time=0.5)
+        self.wait(2)
         self.dots = getattr(self, 'dots', VGroup()).add(dot)
-        self.reset([Fade(arrows, False), Fade(token, False)])
+        self.reset([hide(arrows, token)])
+
+    def hop(self, token, arc, target, color, rt):
+        """The token flies along the arrow, the node lights up as it lands."""
+        land = target.animate.set_fill(color, 0.85).scale(1.1)
+        self.play(LaggedStart(AnimationGroup(Create(arc), MoveAlongPath(token, arc)), land, lag_ratio=0.7),
+                  run_time=rt)
+        self.play(target.animate.scale(1 / 1.1), run_time=0.15)
+
 
     def pages_demo(self):
         """Nodes on different pages: four page boxes, one node in each."""
-        self.play(Fade(self.cells, False), Fade(self.lines, False), Fade(self.ticks, False), run_time=0.4)
+        self.say('Узлы на разных страницах: каждый шаг ищет страницу в буфере TLB.',
+                 'Предвыборка не переходит границу страницы и больше не помогает.', hold=0,
+                 extra=[hide(self.cells, self.lines, self.ticks)])
         pages = VGroup()
         for p in range(4):
             x = X0 + 0.75 + p * 1.55
             box = cell(x, 1.3, 1.35, 1.3, SURF, stroke=SUB)
             pages.add(VGroup(box, txt(f'страница {p}', 13, SUB).move_to((x, 2.15, 0)),
                              txt('4 КБ', 12, DIM).move_to((x, 0.5, 0))))
-        self.play(Create(pages), run_time=0.8)
+        self.play(show(pages, lag=0.15), run_time=1)
         nodes = [cell(X0 + 0.75 + p * 1.55 + (p % 2 - 0.5) * 0.4, 1.3 + (0.5 - p % 2) * 0.3, CW - 0.04, CH,
                       SURF) for p in range(4)]
-        self.play(*[Create(n) for n in nodes], run_time=0.4)
         token = Dot(nodes[0].get_center(), radius=0.09, color=YELLOW).set_z_index(5)
-        self.play(Create(token), nodes[0].animate.set_fill(RED, 0.85), run_time=0.3)
+        self.play(LaggedStart(*[pop(n) for n in nodes], lag_ratio=0.2), run_time=0.7)
+        self.play(pop(token), nodes[0].animate.set_fill(RED, 0.85), run_time=0.5)
         arrows = VGroup()
         for a, b in zip(nodes, nodes[1:]):
             arc = CurvedArrow(a.get_top(), b.get_top(), angle=-PI / 2.5, color=SUB, stroke_width=2, tip_length=0.12)
             arrows.add(arc)
-            self.play(Create(arc), MoveAlongPath(token, arc), run_time=0.6)
-            self.play(b.animate.set_fill(RED, 0.85), run_time=0.6)
+            self.hop(token, arc, b, RED, 1.2)
         dot = self.plot.dot(8192, self.lst[DISTS.index(8192)], RED)
-        self.say('Узлы на разных страницах: каждый шаг ищет страницу в буфере TLB.',
-                 'Предвыборка не переходит границу страницы и больше не помогает.', extra=[Create(dot)])
+        self.play(pop(dot), run_time=0.5)
+        self.wait(2)
         self.dots.add(dot)
-        self.play(Fade(VGroup(pages, *nodes, arrows, token), False), run_time=0.4)
+        self.play(hide(pages, *nodes, arrows, token), run_time=0.6)
 
     def finish(self):
         red = self.plot.curve(DISTS, self.lst, RED)
         legend = self.plot.legend([('список', RED), ('массив', GREEN)], y=self.plot.y0 + self.plot.h * 0.55)
         self.say('Красная линия: список. Ступени стоят на линейке 64 байта и странице 4 КБ.',
                  'Список при любой фрагментации медленнее массива.',
-                 extra=[Create(red, run_time=2.5), Fade(self.dots, False), Fade(legend, True)], run_time=2.5)
+                 extra=[Create(red, run_time=2.5), FadeOut(self.dots, scale=0.3), show(legend, lag=0.2)],
+                 run_time=2.5)
         marks = VGroup(self.plot.mark(LINE, 'линейка', HL, 13), self.plot.mark(PAGE, 'страница', HL, 13))
-        self.play(Create(marks), Fade(self.prog, False), run_time=0.6)
+        self.play(draw(marks), hide(self.prog), run_time=0.8)
         ratio = sum(self.lst) / sum(self.arr)
         self.say(f'Опыт делит суммарное время списка на время массива. В модели вышло {ratio:.0f}.',
                  'Вывод: чтения, которые не зависят друг от друга, процессор выполняет одновременно.')

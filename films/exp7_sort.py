@@ -4,10 +4,11 @@ import sys
 from pathlib import Path
 
 import numpy as np
-from manim import RIGHT, Create, VGroup
+from manim import PI, RIGHT, AnimationGroup, Create, FadeOut, LaggedStart, VGroup
 
 sys.path.insert(0, str(Path(__file__).parent))
-from common import (BLUE, DIM, GREEN, MAUVE, PEACH, RED, SUB, SURF, TEXT, YELLOW, Fade, Film, Plot, cell, txt)  # noqa: E402
+from common import (BLUE, DIM, GREEN, MAUVE, PEACH, RED, SUB, TEXT, YELLOW, Film, Plot, blink, cell, hide,  # noqa: E402
+                    roll, show, txt)
 from model import sort_curve  # noqa: E402
 
 DATA = [53, 17, 82, 37, 61, 28, 74, 13]
@@ -27,8 +28,6 @@ class Exp7Sort(Film):
     TITLE = 'Опыт 7. Сравнение алгоритмов сортировки'
 
     def story(self):
-        self.say('Опыт сортирует массивы 64-битных чисел тремя способами и сравнивает время.',
-                 'В ролике числа двузначные, а разряд равен одной цифре.')
         self.draw_array(DATA)
         self.quicksort()
         self.radix()
@@ -44,20 +43,22 @@ class Exp7Sort(Film):
         self.boxes = VGroup(*[cell(*self.apos(i)[:2], AW - 0.08, 0.5) for i in range(len(values))])
         self.nums = [num(v).move_to(self.apos(i)) for i, v in enumerate(values)]
         self.values = list(values)
-        self.play(Create(self.boxes), *[Fade(n, True) for n in self.nums], run_time=0.8)
+        appear = LaggedStart(*[show(VGroup(b, n), lag=0.3) for b, n in zip(self.boxes, self.nums)], lag_ratio=0.12)
+        self.say('Опыт сортирует массивы 64-битных чисел тремя способами и сравнивает время.',
+                 'В ролике числа двузначные, а разряд равен одной цифре.', extra=[appear], run_time=1.6)
 
     def swap(self, i, j):
         if i == j:
             return
         a, b = self.nums[i], self.nums[j]
-        self.play(a.animate.move_to(self.apos(j)), b.animate.move_to(self.apos(i)), run_time=0.5)
+        # The same arc angle sends one number over the row and the other under it
+        self.play(a.animate(path_arc=PI / 2).move_to(self.apos(j)),
+                  b.animate(path_arc=PI / 2).move_to(self.apos(i)), run_time=0.8)
         self.nums[i], self.nums[j] = b, a
         self.values[i], self.values[j] = self.values[j], self.values[i]
 
-    def flash(self, i, color, rt=0.25):
-        c = self.boxes[i]
-        self.play(c.animate.set_fill(color, 0.45), run_time=rt)
-        self.play(c.animate.set_fill(SURF, 1), run_time=0.1)
+    def flash(self, i, color, rt=0.4):
+        self.play(blink(self.boxes[i], color, 0.5), run_time=rt)
 
     # --- QuickSort --------------------------------------------------------
 
@@ -66,7 +67,7 @@ class Exp7Sort(Film):
         mid = self.values[(lo + hi) >> 1]
         pivot = self.frame(self.boxes[(lo + hi) >> 1], MAUVE)
         self.say(f'QuickSort берёт опорное число {mid} и сравнивает с ним остальные.',
-                 'Меньшие числа уходят влево, большие вправо.', extra=[Create(pivot)])
+                 'Меньшие числа уходят влево, большие вправо.', extra=[Create(pivot)], hold=1.5)
         while True:
             while self.values[lo] < mid:
                 self.flash(lo, GREEN)
@@ -81,13 +82,15 @@ class Exp7Sort(Film):
                 lo, hi = lo + 1, hi - 1
             if lo >= hi:
                 break
-        self.play(Fade(pivot, False), run_time=0.3)
+        self.play(FadeOut(pivot), run_time=0.4)
         self.say('Каждое сравнение даёт условный переход. Сравнений n·log n.',
                  'На случайных числах процессор часто не угадывает переход и сбрасывает конвейер.')
         order = sorted(range(len(self.values)), key=lambda i: self.values[i])
-        self.play(*[self.nums[i].animate.move_to(self.apos(k)) for k, i in enumerate(order)], run_time=1)
-        self.say('Дальше QuickSort так же делит левую и правую части, пока массив не упорядочен.')
-        self.play(*[Fade(n, False) for n in self.nums], run_time=0.4)
+        self.say('Дальше QuickSort так же делит левую и правую части, пока массив не упорядочен.', hold=0)
+        self.play(LaggedStart(*[self.nums[i].animate(path_arc=PI / 3).move_to(self.apos(k))
+                                for k, i in enumerate(order)], lag_ratio=0.1), run_time=1.6)
+        self.wait(1.5)
+        self.play(hide(*self.nums), run_time=0.5)
 
     # --- Radix ------------------------------------------------------------
 
@@ -100,58 +103,65 @@ class Exp7Sort(Film):
 
     def set_count(self, counts, boxes, d, value, color=TEXT):
         new = txt(str(value), 15, color).move_to(boxes[d])
-        anims = [Fade(counts[d], False), Fade(new, True)]
+        anims = roll(counts[d], new)
         counts[d] = new
         return anims
 
     def radix_pass(self, digit, fast):
-        rt = 0.12 if fast else 0.3
-        lit = [num(v, hl=digit).move_to(self.apos(i)) for i, v in enumerate(self.values)]
-        self.play(*[Fade(a, False) for a in self.nums], *[Fade(b, True) for b in lit], run_time=0.4)
-        self.nums = lit
+        rt = 0.4 if fast else 0.7
+        self.play(*[n[1 - digit].animate.set_color(TEXT) for n in self.nums],
+                  *[n[digit].animate.set_color(YELLOW) for n in self.nums], run_time=0.5)
+        if not fast:
+            self.say('Первый проход считает, сколько чисел с каждой цифрой.', hold=0)
         c = [0] * 10
         for i, v in enumerate(self.values):
             d = int(f'{v:02d}'[digit])
             c[d] += 1
-            self.play(self.boxes[i].animate.set_fill(YELLOW, 0.3), self.tab[0][d].animate.set_fill(YELLOW, 0.3),
-                      *self.set_count(self.counts, self.tab[0], d, c[d]), run_time=rt)
-            self.play(self.boxes[i].animate.set_fill(SURF, 1), self.tab[0][d].animate.set_fill(SURF, 1),
-                      run_time=0.05)
-        if not fast:
-            self.say('Первый проход считает, сколько чисел с каждой цифрой.')
+            self.play(*self.count_one(self.nums[i][digit], self.tab[0], self.counts, d, c[d]),
+                      blink(self.boxes[i], YELLOW, 0.35), run_time=rt)
         for d in range(1, 10):
             c[d] += c[d - 1]
-        self.play(*[a for d in range(10) for a in self.set_count(self.counts, self.tab[0], d, c[d], PEACH)],
-                  run_time=0.6)
         if not fast:
-            self.say('Суммы с накоплением дают место, где кончается группа каждой цифры.')
+            self.say('Суммы с накоплением дают место, где кончается группа каждой цифры.', hold=0)
+        self.play(LaggedStart(*[AnimationGroup(*self.set_count(self.counts, self.tab[0], d, c[d], PEACH))
+                                for d in range(10)], lag_ratio=0.12), run_time=1.2)
+        if not fast:
+            self.wait(2)
+            self.say('Второй проход ставит каждое число прямо на его место.',
+                     'Чисел Radix не сравнивает, и условных переходов почти нет.', hold=0)
         out, pos = [None] * len(self.values), [0] * len(self.values)
         outbox = VGroup(*[cell(*self.apos(i, OY)[:2], AW - 0.08, 0.5) for i in range(len(self.values))])
-        self.play(Create(outbox), run_time=0.3)
+        self.play(show(outbox, lag=0.05), run_time=0.5)
         for i in range(len(self.values) - 1, -1, -1):
             v = self.values[i]
             d = int(f'{v:02d}'[digit])
             c[d] -= 1
             out[c[d]], pos[i] = v, c[d]
-            self.play(self.nums[i].animate.move_to(self.apos(c[d], OY)),
-                      *self.set_count(self.counts, self.tab[0], d, c[d], PEACH), run_time=rt * 1.5)
+            self.play(self.nums[i].animate(path_arc=-PI / 4).move_to(self.apos(c[d], OY)),
+                      *self.set_count(self.counts, self.tab[0], d, c[d], PEACH), run_time=rt)
         if not fast:
-            self.say('Второй проход ставит каждое число прямо на его место.',
-                     'Чисел Radix не сравнивает, и условных переходов почти нет.')
+            self.wait(1.5)
         # The output row becomes the input of the next pass
         new_nums = [None] * len(self.values)
         for i, n in enumerate(self.nums):
             new_nums[pos[i]] = n
         self.nums, self.values = new_nums, out
-        self.play(*[n.animate.move_to(self.apos(k)) for k, n in enumerate(self.nums)], Fade(outbox, False),
-                  *[a for d in range(10) for a in self.set_count(self.counts, self.tab[0], d, 0)], run_time=0.6)
+        self.play(*[n.animate.move_to(self.apos(k)) for k, n in enumerate(self.nums)], hide(outbox),
+                  *[a for d in range(10) for a in self.set_count(self.counts, self.tab[0], d, 0)], run_time=0.8)
+
+    def count_one(self, digit_mob, boxes, counts, d, value):
+        """A copy of the digit flies into column d of the table, the count rolls up."""
+        flyer = digit_mob.copy()
+        return [LaggedStart(flyer.animate(path_arc=-0.6).move_to(boxes[d]).set_opacity(0),
+                            AnimationGroup(*self.set_count(counts, boxes, d, value)), lag_ratio=0.6),
+                blink(boxes[d], YELLOW, 0.35)]
 
     def radix(self):
         self.values = list(DATA)
         self.nums = [num(v).move_to(self.apos(i)) for i, v in enumerate(self.values)]
         self.tab, self.counts = self.table(TY, 'счёт')
-        self.play(*[Fade(n, True) for n in self.nums], Create(self.tab), *[Fade(c, True) for c in self.counts],
-                  run_time=0.8)
+        self.play(LaggedStart(show(*self.nums, lag=0.06), show(self.tab, lag=0.2), show(*self.counts, lag=0.04),
+                              lag_ratio=0.3), run_time=1.6)
         self.say('Radix-Counting Sort сортирует по разрядам, начиная с младшего.',
                  'Сначала по последней цифре, потом по первой.')
         self.radix_pass(1, fast=False)
@@ -163,21 +173,20 @@ class Exp7Sort(Film):
     def eradix(self):
         tab2, counts2 = self.table(TY - 1.2, 'десятки')
         name = txt('единицы', 14, SUB).move_to(self.tab[2], aligned_edge=RIGHT)
-        self.play(Fade(self.tab[2], False), Fade(name, True), Create(tab2), *[Fade(c, True) for c in counts2],
-                  run_time=0.6)
+        self.play(*roll(self.tab[2], name), LaggedStart(show(tab2, lag=0.2), show(*counts2, lag=0.04),
+                                                        lag_ratio=0.3), run_time=1.2)
+        self.say('Оптимизированный Radix считает таблицы всех разрядов за один проход.',
+                 'Вместо 8 проходов счёта остаётся один.', hold=0)
         c1, c2 = [0] * 10, [0] * 10
         for i, v in enumerate(self.values):
             u, t = v % 10, v // 10
             c1[u] += 1
             c2[t] += 1
-            self.play(self.boxes[i].animate.set_fill(YELLOW, 0.3),
-                      *self.set_count(self.counts, self.tab[0], u, c1[u]),
-                      *self.set_count(counts2, tab2[0], t, c2[t]), run_time=0.15)
-            self.play(self.boxes[i].animate.set_fill(SURF, 1), run_time=0.05)
-        self.say('Оптимизированный Radix считает таблицы всех разрядов за один проход.',
-                 'Вместо 8 проходов счёта остаётся один.')
-        self.play(Fade(VGroup(tab2, *counts2, self.tab, name, *self.counts, *self.nums, self.boxes), False),
-                  run_time=0.5)
+            self.play(*self.count_one(self.nums[i][1], self.tab[0], self.counts, u, c1[u]),
+                      *self.count_one(self.nums[i][0], tab2[0], counts2, t, c2[t]),
+                      blink(self.boxes[i], YELLOW, 0.35), run_time=0.45)
+        self.wait(1.5)
+        self.play(hide(tab2, *counts2, self.tab, name, *self.counts, *self.nums, self.boxes), run_time=0.7)
 
     # --- graph ------------------------------------------------------------
 
@@ -188,10 +197,10 @@ class Exp7Sort(Film):
                     xticks=[(v * 1e6, f'{v} М') for v in (2, 4, 6, 8, 10)])
         lines = [plot.curve(NS, y, c) for y, c in ((q, MAUVE), (r, BLUE), (e, GREEN))]
         legend = plot.legend([('QuickSort', MAUVE), ('Radix-Counting', BLUE), ('Radix-Counting оптим.', GREEN)])
-        self.play(Create(plot), run_time=0.8)
+        self.play(plot.appear(), run_time=1.2)
         self.say('QuickSort растёт как n·log n, Radix растёт линейно.',
                  'На больших массивах Radix быстрее, и разница растёт с n.',
-                 extra=[*[Create(ln, run_time=2.5) for ln in lines], Fade(legend, True)], run_time=2.5)
+                 extra=[*[Create(ln, run_time=2.5) for ln in lines], show(legend, lag=0.15)], run_time=2.5)
         ratio = sum(q) / sum(r)
         self.say(f'Опыт делит время QuickSort на время Radix. В модели вышло {ratio:.2f}.',
                  'Вывод: алгоритм без сравнений выигрывает на больших массивах.')

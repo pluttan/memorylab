@@ -3,11 +3,11 @@ why stride T1 sends every read to one bank and stride T2 reopens a row on every 
 import sys
 from pathlib import Path
 
-from manim import LEFT, RIGHT, Create, LaggedStart, Succession, VGroup
+from manim import LEFT, RIGHT, AnimationGroup, Create, FadeOut, LaggedStart, VGroup
 
 sys.path.insert(0, str(Path(__file__).parent))
-from common import (DIM, GREEN, HL, LINE, PEACH, RED, SUB, SURF, TEXT, YELLOW, Fade, Film, Plot,  # noqa: E402
-                    cell, code, panel, txt)
+from common import (DIM, GREEN, HL, LINE, PEACH, RED, SUB, SURF, TEXT, YELLOW, Film, Plot, blink, cell, code,  # noqa: E402
+                    draw, hide, panel, pop, roll, show, txt)
 from model import Dram, stratification_curve, stratification_reads  # noqa: E402
 
 DRAM = Dram(rows=64)          # the curve needs an array much longer than the largest stride
@@ -24,8 +24,6 @@ class Exp1Dram(Film):
     TITLE = 'Опыт 1. Расслоение динамической памяти'
 
     def story(self):
-        self.say('Опыт находит, как адрес делится на банк, строку и столбец памяти.',
-                 'По этим долям видно, как устроена оперативная память.')
         self.draw_banks()
         self.draw_address()
         self.draw_code_and_plot()
@@ -67,8 +65,10 @@ class Exp1Dram(Film):
         self.row_names = VGroup(*[txt(f'строка {r}', 12, DIM).move_to((BANK_X[0] - BANK_W / 2 - 0.08, y, 0),
                                                                     aligned_edge=RIGHT)
                                   for r, y in enumerate(ROW_Y)])
-        self.play(LaggedStart(*[Create(g) for g in self.banks], lag_ratio=0.2), Fade(self.row_names, True),
-                  run_time=1.5)
+        appear = LaggedStart(*[show(g, lag=0.12) for g in self.banks], show(self.row_names), lag_ratio=0.15,
+                             run_time=2.2)
+        self.say('Опыт находит, как адрес делится на банк, строку и столбец памяти.',
+                 'По этим долям видно, как устроена оперативная память.', extra=[appear], run_time=2.2)
         self.say('Память состоит из банков. Банки работают одновременно.',
                  'В каждом банке строки, в строке столбцы. Столбец хранит одну линейку кэша, 64 байта.')
         self.spot([self.bufs[0]], 'Банк читает строку целиком в строковый буфер.',
@@ -85,21 +85,27 @@ class Exp1Dram(Film):
             self.addr.add(VGroup(box, txt(name, 14, TEXT).move_to(box), txt(bits, 12, DIM).move_to((x + w / 2, y - 0.33, 0))))
             x += w
         self.addr.add(txt('адрес', 14, SUB).next_to(self.addr[0], LEFT, buff=0.12))
-        self.play(Create(self.addr), run_time=1)
+        self.play(show(self.addr, lag=0.15, shift=(0, 0.2, 0)), run_time=1.2)
         self.spot([self.addr[2]], 'Младшие 6 бит адреса выбирают байт в линейке, следующие 2 бита выбирают банк.',
                   'Поэтому соседние линейки лежат в соседних банках.')
-        # Lines 0..7 land in banks 0, 1, 2, 3, 0, 1, 2, 3
-        nums = VGroup()
-        anims = []
-        for n in range(8):
+        # Lines 0..7 queue up in address order, then fly into banks 0, 1, 2, 3, 0, 1, 2, 3
+        queue = VGroup(*[VGroup(cell(-5.9 + n * 0.42, -0.95, 0.36, 0.32, YELLOW, opacity=0.35, stroke=YELLOW),
+                                txt(str(n), 13, TEXT).move_to((-5.9 + n * 0.42, -0.95, 0)))
+                         for n in range(8)])
+        label = txt('линейки по порядку адресов', 13, SUB).next_to(queue, (1, 0, 0), buff=0.2)
+        self.play(show(queue, lag=0.08), show(label), run_time=1)
+        flights = []
+        for n, item in enumerate(queue):
             bank, row, col = DRAM.place(n * DRAM.line)
-            c = self.cells[bank][row][col]
-            nums.add(txt(str(n), 12, TEXT).move_to(c))
-            anims.append(c.animate.set_fill(YELLOW, 0.45))
+            target = self.cells[bank][row][col]
+            box, num = item
+            flights.append(AnimationGroup(
+                box.animate(path_arc=-0.45).move_to(target).stretch_to_fit_width(target.width)
+                .stretch_to_fit_height(target.height),
+                num.animate(path_arc=-0.45).move_to(target).scale(0.9)))
         self.say('Линейки 0, 1, 2, 3 легли в банки 0, 1, 2, 3, линейка 4 снова в банк 0.',
-                 extra=[LaggedStart(*anims, lag_ratio=0.15), Fade(nums, True)])
-        self.play(*[c.animate.set_fill(SURF, 1) for rows in self.cells for row in rows for c in row],
-                  Fade(nums, False), run_time=0.5)
+                 extra=[LaggedStart(*flights, lag_ratio=0.18, run_time=2.4), FadeOut(label)], run_time=2.4)
+        self.play(hide(queue), run_time=0.5)
 
     def draw_code_and_plot(self):
         self.code = code(['for (b = 0; b < step; b += 64)',
@@ -107,7 +113,7 @@ class Exp1Dram(Film):
                           '        x += p[a];'], -6.3, -1.1, size=16)
         self.plot = Plot(1.0, -2.45, 5.85, 4.7, (0, 4096), (0, 6500), 'шаг, байт', 'время чтения массива',
                          xticks=[(256, '256'), (1024, '1024'), (2048, '2048'), (3072, '3072'), (4096, '4096')])
-        self.play(Fade(self.code, True), Create(self.plot), run_time=1.2)
+        self.play(show(self.code, lag=0.15), self.plot.appear(), run_time=1.4)
         self.say('Программа читает массив с шагом step. При любом шаге число чтений одинаково.',
                  'График показывает время чтения всего массива для каждого шага.')
 
@@ -117,6 +123,7 @@ class Exp1Dram(Film):
         """The first reads of the loop at this stride: reads that run at once light up together."""
         addrs = stratification_reads(DRAM, step, inner=reads)
         groups = self.waves(addrs)
+        self.say(line, second, hold=0)
         lit = []
         for group in groups:
             anims = []
@@ -126,15 +133,16 @@ class Exp1Dram(Film):
                     continue
                 c = self.cells[bank][row][col]
                 lit.append(c)
-                anims.append(c.animate.set_fill(PEACH, 0.9))
+                anims.append(c.animate.set_fill(PEACH, 0.9).scale(1.08))
                 anims += self.open_row(bank, row)
             if anims:
                 self.play(*anims, run_time=0.45 if len(group) > 1 else 0.3)
         dot = self.plot.dot(step, self.curve[step], PEACH)
-        self.say(line, second, extra=[Create(dot)])
+        self.play(pop(dot), run_time=0.5)
+        self.wait(2.5)
         self.dots = getattr(self, 'dots', VGroup())
         self.dots.add(dot)
-        self.play(*[c.animate.set_fill(SURF, 1) for c in lit], *self.close_rows(), run_time=0.4)
+        self.play(*[c.animate.set_fill(SURF, 1).scale(1 / 1.08) for c in lit], *self.close_rows(), run_time=0.5)
 
     def waves(self, addrs):
         """Split reads into steps of the film: reads to different banks run together,
@@ -157,9 +165,7 @@ class Exp1Dram(Film):
         new.row = row
         self.buf_txt[bank] = new
         flash = RED if getattr(old, 'row', None) is not None else GREEN
-        return [Fade(old, False), Fade(new, True),
-                Succession(self.bufs[bank].animate(run_time=0.2).set_fill(flash, 0.6),
-                           self.bufs[bank].animate(run_time=0.2).set_fill(SURF, 1))]
+        return [*roll(old, new), blink(self.bufs[bank], flash, 0.6)]
 
     def close_rows(self):
         anims = []
@@ -169,21 +175,21 @@ class Exp1Dram(Film):
                 continue
             new = txt('строка закрыта', 12, DIM).move_to(self.bufs[b])
             self.buf_txt[b] = new
-            anims += [Fade(old, False), Fade(new, True)]
+            anims += roll(old, new)
         return anims
 
     # --- graph ----------------------------------------------------------
 
     def plot_mark(self, x, name):
         m = self.plot.mark(x, name, HL)
-        self.play(Create(m), run_time=0.6)
+        self.play(draw(m), run_time=0.6)
 
     def full_curve(self):
         line = self.plot.curve(STEPS, [self.curve[s] for s in STEPS], PEACH, width=2.5)
         self.say('Так программа проходит все шаги от 64 байт до 4 КБ.',
                  'Пики стоят на шагах, кратных T1, и растут до T2. После T2 пики не растут.',
                  extra=[Create(line, run_time=3)], run_time=3)
-        self.play(Fade(self.dots, False), run_time=0.3)
+        self.play(FadeOut(self.dots, scale=0.3), run_time=0.4)
 
     def formulas(self):
         box = panel(-3.6, -2.25, 5.6, 1.05)
@@ -191,7 +197,7 @@ class Exp1Dram(Film):
                        txt('РС = T2 / Б = 2048 / 4 = 512 байт', 16, TEXT),
                        txt('С = О / РС', 16, TEXT)).arrange((0, -1, 0), aligned_edge=LEFT, buff=0.1)
         lines.move_to(box)
-        self.play(Fade(self.code, False), Create(box), Fade(lines, True), run_time=0.8)
+        self.play(hide(self.code), draw(box), show(lines, lag=0.2), run_time=1.0)
         self.spot([lines[0]], 'Число банков Б: шаг T1 делим на размер линейки П.',
                   'При шаге T1 чтения впервые все попадают в один банк.')
         self.spot([lines[1]], 'Размер страницы РС: шаг T2 делим на число банков.',

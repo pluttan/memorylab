@@ -3,11 +3,11 @@ must follow; one interleaved array is a single stream that uses every line in fu
 import sys
 from pathlib import Path
 
-from manim import RIGHT, Create, VGroup
+from manim import RIGHT, AnimationGroup, Create, FadeOut, LaggedStart, VGroup
 
 sys.path.insert(0, str(Path(__file__).parent))
-from common import (BLUE, DIM, GREEN, MAUVE, PEACH, RED, SURF, TEAL, YELLOW, Fade, Film, Plot, cell, code,  # noqa: E402
-                    panel, txt)
+from common import (BLUE, DIM, GREEN, MAUVE, PEACH, RED, SURF, TEAL, YELLOW, Film, Plot, cell, code, hide,  # noqa: E402
+                    panel, pop, roll, show, txt)
 from model import TRACKED, streams_curve  # noqa: E402
 
 COLORS = [BLUE, PEACH, GREEN, MAUVE, YELLOW, TEAL]
@@ -22,8 +22,6 @@ class Exp4Streams(Film):
 
     def story(self):
         self.sep, self.tog = streams_curve(COUNTS)
-        self.say('Опыт читает r массивов одновременно: на каждом шаге по элементу из каждого.',
-                 'Сравниваются два способа разместить те же данные в памяти.')
         self.draw_prefetcher()
         self.draw_plot()
         self.separate(TRACKED)
@@ -46,27 +44,29 @@ class Exp4Streams(Film):
             t = txt('свободно', 12, DIM).move_to(c)
             self.slots.append([c, t])
             self.pf.add(c, t)
-        self.play(Create(self.pf), run_time=0.8)
+        self.say('Опыт читает r массивов одновременно: на каждом шаге по элементу из каждого.',
+                 'Сравниваются два способа разместить те же данные в памяти.',
+                 extra=[show(self.pf, lag=0.1, run_time=1.5)], run_time=1.5)
         self.say('Аппаратная предвыборка замечает поток адресов и приносит линейки заранее.',
                  f'В модели она следит за {TRACKED} потоками сразу. У реальных процессоров потоков больше.')
 
     def draw_plot(self):
         self.plot = Plot(1.0, -2.45, 5.85, 4.7, (1, 32), (0, 100), 'количество массивов r', 'время',
                          xticks=[(v, str(v)) for v in (1, 4, 8, 16, 24, 32)])
-        self.play(Create(self.plot), run_time=0.8)
+        self.play(self.plot.appear(), run_time=1.2)
 
     def take_slot(self, s, name, color):
         c, t = self.slots[s]
         new = txt(name, 12, color).move_to(c)
         self.slots[s][1] = new
-        return [Fade(t, False), Fade(new, True), c.animate.set_fill(color, 0.25)]
+        return [*roll(t, new), c.animate.set_fill(color, 0.25)]
 
     def free_slots(self):
         anims = []
         for s, (c, t) in enumerate(self.slots):
             new = txt('свободно', 12, DIM).move_to(c)
             self.slots[s][1] = new
-            anims += [Fade(t, False), Fade(new, True), c.animate.set_fill(SURF, 1)]
+            anims += [*roll(t, new), c.animate.set_fill(SURF, 1)]
         return anims
 
     # --- separate arrays --------------------------------------------------
@@ -75,31 +75,37 @@ class Exp4Streams(Film):
         self.prog = code(['for (a = 0; a < n; a++)', '    for (b = 0; b < r; b++)', '        x += px[b][a];'],
                          -6.55, -0.2)
         self.strips = VGroup(*[self.strip(k) for k in range(r)])
-        self.play(Create(self.strips), Fade(self.prog, True), run_time=1)
+        appear = LaggedStart(*[show(st, lag=0.1) for st in self.strips], show(self.prog, lag=0.2), lag_ratio=0.15)
         self.say('Неоптимизированная структура: r отдельных массивов в разных местах памяти.',
-                 'Каждый массив даёт свой поток адресов.')
-        self.play(*[a for k in range(r) for a in self.take_slot(k, f'массив {k}', COLORS[k])], run_time=0.6)
-        for i in range(4):
-            self.play(*[self.strips[k][0][i].animate.set_fill(COLORS[k], 0.85) for k in range(r)],
-                      *[self.strips[k][0][i + 1].animate.set_fill(COLORS[k], 0.3) for k in range(r)], run_time=0.3)
-        dot = self.plot.dot(r, self.sep[r - 1], RED)
+                 'Каждый массив даёт свой поток адресов.', extra=[appear], run_time=1.6)
+        self.play(LaggedStart(*[AnimationGroup(*self.take_slot(k, f'массив {k}', COLORS[k])) for k in range(r)],
+                              lag_ratio=0.2), run_time=1)
         self.say(f'При r = {r} предвыборка успевает за всеми потоками.',
-                 'Но каждый шаг читает 4 байта из r разных линеек.', extra=[Create(dot)])
+                 'Но каждый шаг читает 4 байта из r разных линеек.', hold=0)
+        for i in range(4):
+            self.play(LaggedStart(*[AnimationGroup(self.strips[k][0][i].animate.set_fill(COLORS[k], 0.85),
+                                                   self.strips[k][0][i + 1].animate.set_fill(COLORS[k], 0.3))
+                                    for k in range(r)], lag_ratio=0.15), run_time=0.6)
+        dot = self.plot.dot(r, self.sep[r - 1], RED)
+        self.play(pop(dot), run_time=0.5)
+        self.wait(1.5)
         self.dots = VGroup(dot)
 
     def separate_more(self, r):
         more = VGroup(*[self.strip(k) for k in range(len(self.strips), r)])
-        self.play(Create(more), run_time=0.6)
+        self.say(f'При r = {r} потоков больше, чем ячеек предвыборки. Лишние массивы ждут память.',
+                 'Каждый поток к тому же держит открытой свою строку памяти.', hold=0,
+                 extra=[LaggedStart(*[show(st, lag=0.1) for st in more], lag_ratio=0.3)], run_time=1)
         self.strips.add(*more)
         for i in range(4, 8):
             reads = [self.strips[k][0][i].animate.set_fill(COLORS[k] if k < TRACKED else RED, 0.85)
                      for k in range(r)]
-            self.play(*reads, run_time=0.3 if i > 4 else 0.6)
+            self.play(LaggedStart(*reads, lag_ratio=0.15), run_time=0.9 if i == 4 else 0.6)
         dot = self.plot.dot(r, self.sep[r - 1], RED)
-        self.say(f'При r = {r} потоков больше, чем ячеек предвыборки. Лишние массивы ждут память.',
-                 'Каждый поток к тому же держит открытой свою строку памяти.', extra=[Create(dot)])
+        self.play(pop(dot), run_time=0.5)
+        self.wait(2)
         self.dots.add(dot)
-        self.play(Fade(self.strips, False), Fade(self.prog, False), *self.free_slots(), run_time=0.5)
+        self.play(hide(self.strips, self.prog), *self.free_slots(), run_time=0.7)
 
     # --- interleaved array ------------------------------------------------
 
@@ -111,17 +117,20 @@ class Exp4Streams(Film):
         cells = VGroup(*[cell(-6.6 + (i + 0.5) * cw, 1.9, cw - 0.03, 0.4) for i in range(r * n)])
         names = VGroup(*[txt(str(i % r), 11, DIM).move_to(cells[i].get_center() + (0, 0.33, 0))
                          for i in range(r * n)])
-        self.play(Create(cells), Fade(names, True), Fade(self.prog, True), run_time=0.8)
+        appear = LaggedStart(show(cells, lag=0.03), show(names, lag=0.03), show(self.prog, lag=0.2), lag_ratio=0.3)
         self.say('Оптимизированная структура кладёт элементы всех массивов рядом.',
-                 'Над ячейкой номер массива. Шаг читает r соседних слов.')
-        self.play(*self.take_slot(0, 'один поток', GREEN), run_time=0.4)
-        for i in range(n):
-            self.play(*[cells[i * r + k].animate.set_fill(COLORS[k], 0.85) for k in range(r)], run_time=0.35)
-        dot = self.plot.dot(r, self.tog[r - 1], GREEN)
+                 'Над ячейкой номер массива. Шаг читает r соседних слов.', extra=[appear], run_time=1.6)
         self.say('Это один поток адресов. Каждая принесённая линейка используется целиком.',
-                 'Предвыборке хватает одной ячейки при любом r.', extra=[Create(dot)])
+                 'Предвыборке хватает одной ячейки при любом r.', hold=0,
+                 extra=[AnimationGroup(*self.take_slot(0, 'один поток', GREEN))])
+        for i in range(n):
+            self.play(LaggedStart(*[cells[i * r + k].animate.set_fill(COLORS[k], 0.85) for k in range(r)],
+                                  lag_ratio=0.12), run_time=0.6)
+        dot = self.plot.dot(r, self.tog[r - 1], GREEN)
+        self.play(pop(dot), run_time=0.5)
+        self.wait(2)
         self.dots.add(dot)
-        self.play(Fade(VGroup(cells, names), False), run_time=0.4)
+        self.play(hide(cells, names), run_time=0.6)
 
     def finish(self):
         red = self.plot.curve(COUNTS, self.sep, RED)
@@ -129,9 +138,8 @@ class Exp4Streams(Film):
         legend = self.plot.legend([('отдельные массивы', RED), ('один массив', GREEN)])
         self.say('Оба графика растут: с каждым массивом данных больше.',
                  'Красный растёт быстрее, когда потоков больше, чем умеет предвыборка.',
-                 extra=[Create(red, run_time=2), Create(green, run_time=2), Fade(legend, True),
-                        Fade(self.dots, False)], run_time=2)
+                 extra=[Create(red, run_time=2), Create(green, run_time=2), show(legend, lag=0.2),
+                        FadeOut(self.dots, scale=0.3)], run_time=2)
         ratio = sum(self.sep) / sum(self.tog)
         self.say(f'Опыт делит суммарное время отдельных массивов на время одного. В модели вышло {ratio:.1f}.',
                  'Вывод: данные, которые читаются вместе, выгодно хранить рядом.')
-        self.play(Fade(self.prog, False), run_time=0.3)

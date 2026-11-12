@@ -8,8 +8,9 @@ import os
 from pathlib import Path
 
 import numpy as np
-from manim import (BOLD, ITALIC, LEFT, RIGHT, UP, Animation, Create, DashedLine, Dot, Line, Mobject, Rectangle,
-                   RoundedRectangle, Scene, SurroundingRectangle, Text, VGroup, VMobject, config)
+from manim import (BOLD, DOWN, ITALIC, LEFT, RIGHT, UP, Animation, AnimationGroup, Create, DashedLine, Dot, FadeIn,
+                   FadeOut, LaggedStart, Line, Mobject, Rectangle, RoundedRectangle, Scene, SurroundingRectangle, Text,
+                   VGroup, VMobject, Write, config, there_and_back)
 from manim.renderer.cairo_renderer import CairoRenderer
 
 FONT, MONO = 'GOST Type BU', 'PT Mono'
@@ -44,11 +45,12 @@ CairoRenderer.save_static_frame_data = _not_when_skipping(CairoRenderer.save_sta
 def txt(s, size=18, color=TEXT):
     # GOST Type BU has one weight: an outline in the text colour thickens the letters
     t = Text(s, font=FONT, font_size=size, color=color, weight=BOLD, slant=ITALIC)
-    return t.set_stroke(color, width=size * 0.03, opacity=1)
+    # Every animation lifts its mobject to the top: a cell that blinks would cover its label
+    return t.set_stroke(color, width=size * 0.03, opacity=1).set_z_index(3)
 
 
 def mono(s, size=16, color=TEXT):
-    return Text(s, font=MONO, font_size=size, color=color)
+    return Text(s, font=MONO, font_size=size, color=color).set_z_index(3)
 
 
 def code(lines, x, y, size=15, dy=0.3):
@@ -82,6 +84,68 @@ def polyline(points, color, width=3):
         [np.array((a, b, 0.0)) for a, b in points])
 
 
+# ==========================
+# ===  Motion            ===
+# ==========================
+# The films move like the pipeline-anim videos: parts slide in one after another,
+# leave with a short slide, labels roll over, dots grow from their centre.
+# Create is kept for lines and frames: on text it traces every letter.
+
+def _kw(run_time):
+    return {} if run_time is None else {'run_time': run_time}
+
+
+def parts(group):
+    """Top-level pieces of a group; a text or a single shape stays whole."""
+    if isinstance(group, Text) or not isinstance(group, VGroup) or not group.submobjects:
+        return [group]
+    return list(group.submobjects)
+
+
+def show(*groups, lag=0.08, shift=UP * 0.15, run_time=None):
+    """Pieces fade in one after another with a short slide up."""
+    pieces = [q for g in groups for q in parts(g)]
+    shift = np.array(shift, dtype=float)       # a tuple times -1 would turn into an empty tuple
+    return LaggedStart(*[FadeIn(q, shift=shift) for q in pieces], lag_ratio=lag, **_kw(run_time))
+
+
+def hide(*mobs, run_time=None):
+    return AnimationGroup(*[FadeOut(m, shift=DOWN * 0.1) for m in mobs], **_kw(run_time))
+
+
+def draw(*groups, run_time=None):
+    """Lines and frames are drawn, texts fade in."""
+    anims = []
+
+    def walk(m):
+        if isinstance(m, Text):
+            anims.append(FadeIn(m))
+        elif isinstance(m, VGroup) and m.submobjects:
+            for q in m.submobjects:
+                walk(q)
+        else:
+            anims.append(Create(m))
+    for g in groups:
+        walk(g)
+    return AnimationGroup(*anims, **_kw(run_time))
+
+
+def pop(mob, run_time=None):
+    """A dot or a mark grows from its centre."""
+    return FadeIn(mob, scale=0.2, **_kw(run_time))
+
+
+def roll(old, new, dy=0.12):
+    """Replace a label in place: the old one leaves upward, the new one comes up from below.
+    dy=0 cross-fades, for labels stacked close to each other."""
+    return [FadeOut(old, shift=UP * dy), FadeIn(new, shift=UP * dy)]
+
+
+def blink(mob, color, opacity=0.8):
+    """Light a shape up and back in one smooth move."""
+    return mob.animate(rate_func=there_and_back).set_fill(color, opacity)
+
+
 class Fade(Animation):
     """Fade by opacity alone: the stock FadeIn copies the mobject three times. The old
     text fades in the first half, the new one in the second, so they never overlap."""
@@ -110,18 +174,24 @@ class Plot(VGroup):
     def __init__(self, x0, y0, w, h, xr, yr, xlabel, ylabel, xticks=(), yticks=(), xlog=False):
         super().__init__()
         self.x0, self.y0, self.w, self.h, self.xr, self.yr, self.xlog = x0, y0, w, h, xr, yr, xlog
-        self.add(Line((x0, y0, 0), (x0 + w, y0, 0), color=SUB, stroke_width=2),
-                 Line((x0, y0, 0), (x0, y0 + h, 0), color=SUB, stroke_width=2))
+        self.lines, self.labels = VGroup(), VGroup()
+        self.lines.add(Line((x0, y0, 0), (x0 + w, y0, 0), color=SUB, stroke_width=2),
+                       Line((x0, y0, 0), (x0, y0 + h, 0), color=SUB, stroke_width=2))
         for v, label in xticks:
             px = self.at(v, yr[0])[0]
-            self.add(DashedLine((px, y0, 0), (px, y0 + h, 0), color=LINE, stroke_width=1, dash_length=0.06),
-                     txt(label, 13, DIM).move_to((px, y0 - 0.2, 0)))
+            self.lines.add(DashedLine((px, y0, 0), (px, y0 + h, 0), color=LINE, stroke_width=1, dash_length=0.06))
+            self.labels.add(txt(label, 13, DIM).move_to((px, y0 - 0.2, 0)))
         for v, label in yticks:
             py = self.at(xr[0], v)[1]
-            self.add(DashedLine((x0, py, 0), (x0 + w, py, 0), color=LINE, stroke_width=1, dash_length=0.06),
-                     txt(label, 13, DIM).move_to((x0 - 0.1, py, 0), aligned_edge=RIGHT))
-        self.add(txt(xlabel, 15, SUB).move_to((x0 + w, y0 - 0.48, 0), aligned_edge=RIGHT),
-                 txt(ylabel, 15, SUB).move_to((x0, y0 + h + 0.22, 0), aligned_edge=LEFT))
+            self.lines.add(DashedLine((x0, py, 0), (x0 + w, py, 0), color=LINE, stroke_width=1, dash_length=0.06))
+            self.labels.add(txt(label, 13, DIM).move_to((x0 - 0.1, py, 0), aligned_edge=RIGHT))
+        self.labels.add(txt(xlabel, 15, SUB).move_to((x0 + w, y0 - 0.48, 0), aligned_edge=RIGHT),
+                        txt(ylabel, 15, SUB).move_to((x0, y0 + h + 0.22, 0), aligned_edge=LEFT))
+        self.add(self.lines, self.labels)
+
+    def appear(self, run_time=1.0):
+        """Axes and grid are drawn, labels fade in after them."""
+        return AnimationGroup(Create(self.lines), show(self.labels, lag=0.05), lag_ratio=0.4, run_time=run_time)
 
     def _fx(self, x):
         a, b = self.xr
@@ -169,10 +239,11 @@ class Film(Scene):
     def construct(self):
         self.capt = VGroup()
         self.head = txt(self.TITLE, 26, TEXT).move_to((-6.8, TITLE_Y, 0), aligned_edge=LEFT)
-        self.play(Fade(self.head, True), run_time=0.6)
+        self.play(Write(self.head), run_time=1.0)
         self.story()
-        self.play(Fade(self.capt, False), run_time=0.5)
-        self.wait(1)
+        self.wait(0.5)
+        self.play(*[FadeOut(m) for m in self.mobjects], run_time=0.8)
+        self.wait(0.5)
         if os.environ.get('MANIM_COUNT'):
             Path(os.environ['MANIM_COUNT']).write_text(str(self.renderer.num_plays))
 
@@ -191,7 +262,7 @@ class Film(Scene):
         self.play(Fade(self.capt, False), Fade(g, True), *extra, run_time=run_time)
         self.capt = g
         if hold is None:
-            hold = 0.8 + (len(line) + len(second)) / 17
+            hold = 0.6 + (len(line) + len(second)) / 24
         if hold > 0:
             self.wait(hold)
 
@@ -201,5 +272,5 @@ class Film(Scene):
     def spot(self, mobs, line, second='', hold=None):
         """Frame the parts, say what they show, drop the frames after reading."""
         frames = VGroup(*[self.frame(m) for m in mobs])
-        self.say(line, second, extra=[Create(frames)], hold=hold)
-        self.play(Fade(frames, False), run_time=0.4)
+        self.say(line, second, extra=[LaggedStart(*[Create(f) for f in frames], lag_ratio=0.1)], hold=hold)
+        self.play(FadeOut(frames), run_time=0.4)
