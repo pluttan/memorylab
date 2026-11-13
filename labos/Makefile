@@ -39,7 +39,7 @@ QEMU_ARGS := -machine q35 -cpu max -m 1G -smp 1 \
 	-netdev user,id=net0,hostfwd=udp:127.0.0.1:$(PORT)-:5555 -device e1000,netdev=net0 \
 	-serial file:$(ABS)/serial.log
 
-.PHONY: all build venv font test qemu qemu-headless screenshot stop clean help ping remote-log remote-screen usb
+.PHONY: all build font test qemu qemu-headless screenshot stop clean help ping remote-log remote-screen usb
 
 all: build
 
@@ -70,7 +70,6 @@ $(BUILD)/obj $(ESP)/EFI/BOOT:
 $(VENV):
 	python3.12 -m venv $(VENV) && $(VENV)/bin/pip install -q -U pip && $(VENV)/bin/pip install -q -r requirements.txt
 
-venv: $(VENV)
 
 font: $(VENV)
 	$(PY) tools/mkfont.py $(FONT) $(FONT_SIZE) src/font_gost.h
