@@ -35,6 +35,8 @@ void gfx_dot(i32 x, i32 y, i32 radius, u32 rgb);
 // y is the top of the text line; returns the width in pixels
 i32 gfx_text(i32 x, i32 y, const char *utf8, u32 rgb);
 i32 gfx_text_width(const char *utf8);
+i32 gfx_text_n(i32 x, i32 y, const char *utf8, usize length, u32 rgb);
+i32 gfx_text_width_n(const char *utf8, usize length);
 i32 gfx_line_height(void);
 
 #endif

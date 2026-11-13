@@ -8,6 +8,7 @@ LLD_LINK ?= $(LLD_BIN)/lld-link
 QEMU ?= qemu-system-x86_64
 OVMF ?= $(firstword $(wildcard /opt/homebrew/share/qemu/edk2-x86_64-code.fd /usr/share/OVMF/OVMF_CODE.fd))
 PORT ?= 5555
+CPU ?= max
 HOST ?= 127.0.0.1
 LABCTL = $(PY) tools/labctl.py --host $(HOST) --port $(PORT)
 
@@ -33,7 +34,7 @@ LDFLAGS := /subsystem:efi_application /entry:efi_main /nodefaultlib /machine:x64
 
 # Absolute paths: with -daemonize QEMU changes to / and opens the FAT directory lazily
 ABS := $(abspath $(BUILD))
-QEMU_ARGS := -machine q35 -cpu max -m 1G -smp 1 \
+QEMU_ARGS := -machine q35 -cpu $(CPU) -m 1G -smp 1 \
 	-drive if=pflash,format=raw,readonly=on,file=$(OVMF) \
 	-drive format=raw,file=fat:rw:$(ABS)/esp \
 	-netdev user,id=net0,hostfwd=udp:127.0.0.1:$(PORT)-:5555 -device e1000,netdev=net0 \
@@ -80,7 +81,11 @@ test: | $(BUILD)
 	cc -O1 -Wall -Wextra -Werror -Isrc tests/test_analysis.c src/analysis.c -o $(BUILD)/test_analysis
 	$(BUILD)/test_plotmath
 	$(BUILD)/test_netpkt
+	cc -O1 -Wall -Wextra -Werror -Isrc tests/test_params.c src/params.c -o $(BUILD)/test_params
 	$(BUILD)/test_analysis
+	cc -O1 -Wall -Wextra -Werror -Isrc tests/test_leaf2.c src/cpuid_leaf2.c -o $(BUILD)/test_leaf2
+	$(BUILD)/test_params
+	$(BUILD)/test_leaf2
 
 $(BUILD):
 	mkdir -p $@

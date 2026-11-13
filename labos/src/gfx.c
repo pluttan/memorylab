@@ -121,9 +121,10 @@ static u32 blend(u32 bg, u32 fg, u32 a) {
     return (r << 16) | (g << 8) | b;
 }
 
-i32 gfx_text(i32 x, i32 y, const char *utf8, u32 rgb) {
+i32 gfx_text_n(i32 x, i32 y, const char *utf8, usize length, u32 rgb) {
     i32 start = x;
-    while (*utf8) {
+    const char *end = utf8 + length;
+    while (utf8 < end && *utf8) {
         int g = find_glyph(utf8_next(&utf8));
         if (g < 0) continue;
         const u8 *alpha = font_alpha + font_glyphs[g].offset;
@@ -142,13 +143,18 @@ i32 gfx_text(i32 x, i32 y, const char *utf8, u32 rgb) {
     return x - start;
 }
 
-i32 gfx_text_width(const char *utf8) {
+i32 gfx_text_width_n(const char *utf8, usize length) {
     i32 w = 0;
-    while (*utf8) {
+    const char *end = utf8 + length;
+    while (utf8 < end && *utf8) {
         int g = find_glyph(utf8_next(&utf8));
         if (g >= 0) w += font_glyphs[g].advance;
     }
     return w;
 }
+
+i32 gfx_text(i32 x, i32 y, const char *utf8, u32 rgb) { return gfx_text_n(x, y, utf8, strlen(utf8), rgb); }
+
+i32 gfx_text_width(const char *utf8) { return gfx_text_width_n(utf8, strlen(utf8)); }
 
 i32 gfx_line_height(void) { return FONT_HEIGHT; }
