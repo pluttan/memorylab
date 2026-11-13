@@ -8,6 +8,8 @@ LLD_LINK ?= $(LLD_BIN)/lld-link
 QEMU ?= qemu-system-x86_64
 OVMF ?= $(firstword $(wildcard /opt/homebrew/share/qemu/edk2-x86_64-code.fd /usr/share/OVMF/OVMF_CODE.fd))
 PORT ?= 5555
+HOST ?= 127.0.0.1
+LABCTL = $(PY) tools/labctl.py --host $(HOST) --port $(PORT)
 
 VENV := venv
 PY := $(VENV)/bin/python3.12
@@ -33,7 +35,7 @@ QEMU_ARGS := -machine q35 -cpu max -m 1G -smp 1 \
 	-netdev user,id=net0,hostfwd=udp:127.0.0.1:$(PORT)-:5555 -device e1000,netdev=net0 \
 	-serial file:$(ABS)/serial.log
 
-.PHONY: all build venv font test qemu qemu-headless screenshot stop clean help
+.PHONY: all build venv font test qemu qemu-headless screenshot stop clean help ping remote-log remote-screen
 
 all: build
 
@@ -45,6 +47,9 @@ help:
 	@echo "make stop           - остановить QEMU без окна"
 	@echo "make test           - тесты чистых модулей на этой машине"
 	@echo "make font           - пересобрать src/font_gost.h из $(FONT)"
+	@echo "make ping           - спросить labos по сети (HOST=$(HOST) PORT=$(PORT))"
+	@echo "make remote-log     - журнал labos по сети"
+	@echo "make remote-screen  - снимок экрана labos по сети в $(BUILD)/remote.png"
 
 build: $(EFI)
 
@@ -67,7 +72,9 @@ font: $(VENV)
 
 test: | $(BUILD)
 	cc -O1 -Wall -Wextra -Werror -Isrc tests/test_plotmath.c src/plotmath.c src/fmt.c -o $(BUILD)/test_plotmath
+	cc -O1 -Wall -Wextra -Werror -Isrc tests/test_netpkt.c src/netpkt.c -o $(BUILD)/test_netpkt
 	$(BUILD)/test_plotmath
+	$(BUILD)/test_netpkt
 
 $(BUILD):
 	mkdir -p $@
@@ -86,6 +93,15 @@ screenshot: $(VENV)
 
 stop:
 	-[ -f $(BUILD)/qemu.pid ] && kill $$(cat $(BUILD)/qemu.pid) && rm -f $(BUILD)/qemu.pid
+
+ping: $(VENV)
+	$(LABCTL) ping
+
+remote-log: $(VENV)
+	$(LABCTL) log
+
+remote-screen: $(VENV) | $(BUILD)
+	$(LABCTL) screen $(BUILD)/remote.png
 
 clean:
 	rm -rf $(BUILD)

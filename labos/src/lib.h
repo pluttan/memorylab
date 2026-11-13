@@ -21,6 +21,16 @@ void release(void *ptr);
 // Physically contiguous pages; UEFI maps memory one to one, so the address is both virtual and physical
 void *alloc_pages(usize pages);
 
+// TSC clock, calibrated against the firmware Stall() at start
+static inline u64 rdtsc(void) {
+    u32 lo, hi;
+    __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
+    return (u64)hi << 32 | lo;
+}
+void time_init(void);
+u64 now_us(void);
+extern double tsc_per_ns;
+
 // One line to COM1 and to the log ring (the console is not used: it would print over the graphs)
 void log_line(const char *format, ...);
 #define LOG_RING_SIZE 16384

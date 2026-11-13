@@ -76,6 +76,22 @@ void *alloc_pages(usize pages) {
 }
 
 // ==========================
+// ===  Time              ===
+// ==========================
+
+double tsc_per_ns = 1;
+
+void time_init(void) {
+    u64 t0 = rdtsc();
+    BS->stall(50000);
+    u64 t1 = rdtsc();
+    tsc_per_ns = (double)(t1 - t0) / 50e6;
+    if (tsc_per_ns <= 0) tsc_per_ns = 1;
+}
+
+u64 now_us(void) { return (u64)((double)rdtsc() / tsc_per_ns / 1000); }
+
+// ==========================
 // ===  Log               ===
 // ==========================
 

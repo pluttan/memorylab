@@ -1,7 +1,9 @@
 // labos: memory experiments on bare hardware, graphs on the screen, control over the network.
 #include "gfx.h"
 #include "lib.h"
+#include "net.h"
 #include "plot.h"
+#include "remote.h"
 
 #define SCAN_ESC 0x17
 #define EFI_RESET_COLD 0
@@ -39,7 +41,18 @@ static void draw_demo(void) {
     plot_frame(&b);
     plot_line(&b, sizes, times, 24, COL_MAUVE);
     plot_dots(&b, sizes, times, 24, COL_BLUE);
-    draw_status("labos · Esc: перезагрузка");
+    gfx_present();
+}
+
+// The bottom line shows the address labctl needs; redrawn when it changes
+static void update_status(void) {
+    static char shown[64];
+    char ip[32], text[64];
+    net_status(ip, sizeof ip);
+    fmt(text, sizeof text, "labos · %s · Esc: перезагрузка", ip);
+    if (!strncmp(text, shown, sizeof shown)) return;
+    memcpy(shown, text, sizeof shown);
+    draw_status(text);
     gfx_present();
 }
 
@@ -49,16 +62,25 @@ efi_status efi_main(efi_handle image, efi_system_table *st) {
     IMAGE = image;
     // UEFI resets the machine after five minutes of a running application unless the watchdog is off
     BS->set_watchdog_timer(0, 0, 0, 0);
-    log_line("labos: start, firmware revision %x", st->firmware_revision);
+    time_init();
+    log_line("labos: start, firmware revision %x, TSC %.3f GHz", st->firmware_revision, tsc_per_ns);
     if (!gfx_init()) return EFI_ERR(1);
     draw_demo();
-    log_line("labos: demo drawn");
+    if (net_init() && !remote_init()) log_line("labos: no memory for the remote buffer");
+    log_line("labos: ready");
+    u64 reset_at = 0;
     for (;;) {
+        net_poll();
+        update_status();
         efi_input_key key;
         if (ST->con_in->read_key_stroke(ST->con_in, &key) == EFI_SUCCESS && key.scan_code == SCAN_ESC) {
+            remote_reset_requested = 1;
+        }
+        if (remote_reset_requested && !reset_at) reset_at = now_us() + 200000;
+        if (reset_at && now_us() > reset_at) {
             log_line("labos: reset");
             ST->runtime_services->reset_system(EFI_RESET_COLD, EFI_SUCCESS, 0, 0);
         }
-        BS->stall(1000);
+        BS->stall(100);
     }
 }
