@@ -18,12 +18,9 @@ static i32 to_y(const plot *p, double v) {
 static void tick_label(char *out, usize size, double v, double step, axis_kind kind) {
     if (kind == AXIS_BYTES) {
         format_bytes(out, (unsigned)size, v);
-        return;
+    } else {
+        format_number(out, (unsigned)size, v, step_decimals(step));
     }
-    int decimals = step_decimals(step);
-    char spec[8];
-    fmt(spec, sizeof spec, "%%.%df", decimals);
-    fmt(out, size, spec, v);
 }
 
 static void x_ticks(const plot *p, i32 label_y) {
@@ -47,7 +44,8 @@ static void x_ticks(const plot *p, i32 label_y) {
         }
         return;
     }
-    double step = nice_step(p->x0, p->x1, p->fw / 110);
+    double step = p->x_kind == AXIS_BYTES ? nice_step_bytes(p->x0, p->x1, p->fw / 120)
+                                          : nice_step(p->x0, p->x1, p->fw / 110);
     i64 first = (i64)(p->x0 / step);
     for (double v = first * step; v <= p->x1 + step * 1e-6; v += step) {
         if (v < p->x0 - step * 1e-6) continue;
@@ -55,7 +53,10 @@ static void x_ticks(const plot *p, i32 label_y) {
         tick_label(text, sizeof text, v, step, p->x_kind);
         gfx_line(x, p->fy, x, p->fy + p->fh, COL_GRID, 1);
         gfx_line(x, p->fy + p->fh, x, p->fy + p->fh + TICK, COL_AXIS, 1);
-        gfx_text(x - gfx_text_width(text) / 2, label_y, text, COL_SUBTEXT);
+        // The last label would run off the right edge
+        i32 w = gfx_text_width(text), left = x - w / 2;
+        if (left + w > p->x + p->w - 4) left = p->x + p->w - 4 - w;
+        gfx_text(left, label_y, text, COL_SUBTEXT);
     }
 }
 
@@ -84,7 +85,7 @@ void plot_frame(plot *p) {
     tick_label(text, sizeof text, p->y1, step, AXIS_NUMBER);
     i32 left = gfx_text_width(text) + TICK + 4 + PAD + lh + 4;
     p->fx = p->x + left;
-    p->fy = p->y + PAD + lh + 6;
+    p->fy = p->y + PAD + lh + 6 + (p->legend_row ? lh + 4 : 0);
     p->fw = p->w - left - PAD * 2;
     p->fh = p->h - (p->fy - p->y) - (TICK + lh * 2 + PAD + 8);
     gfx_fill(p->fx, p->fy, p->fw, p->fh, COL_FIELD);
@@ -112,8 +113,13 @@ void plot_dots(const plot *p, const double *xs, const double *ys, usize n, u32 c
     for (usize i = 0; i < n; i++) gfx_dot(to_x(p, xs[i]), to_y(p, ys[i]), 1, color);
 }
 
+void plot_hline(const plot *p, double y, u32 color) {
+    if (y < p->y0 || y > p->y1) return;
+    gfx_line(p->fx, to_y(p, y), p->fx + p->fw, to_y(p, y), color, 2);
+}
+
 void plot_legend(const plot *p, const legend_item *items, usize n) {
-    i32 x = p->fx + p->fw, y = p->y + PAD;
+    i32 x = p->fx + p->fw, y = p->y + PAD + (p->legend_row ? gfx_line_height() + 4 : 0);
     for (usize i = n; i-- > 0;) {
         x -= gfx_text_width(items[i].name);
         gfx_text(x, y, items[i].name, items[i].color);

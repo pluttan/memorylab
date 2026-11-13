@@ -75,6 +75,28 @@ void *alloc_pages(usize pages) {
     return (void *)addr;
 }
 
+u64 memory_total_bytes(void) {
+    usize size = 0, key = 0, desc_size = 0;
+    u32 version = 0;
+    BS->get_memory_map(&size, 0, &key, &desc_size, &version);
+    size += 8 * desc_size;  // the allocation below may add descriptors
+    u8 *map = alloc(size);
+    if (!map || BS->get_memory_map(&size, (efi_memory_descriptor *)map, &key, &desc_size, &version) != EFI_SUCCESS) {
+        release(map);
+        return 0;
+    }
+    u64 pages = 0;
+    for (usize off = 0; off + desc_size <= size; off += desc_size) {
+        efi_memory_descriptor *d = (efi_memory_descriptor *)(map + off);
+        // Loader, boot and runtime services, conventional and ACPI memory are RAM; MMIO and reserved are not
+        if ((d->type >= 1 && d->type <= 7) || d->type == 9 || d->type == 10) pages += d->number_of_pages;
+    }
+    release(map);
+    // Firmware holes make the sum a little smaller than the installed modules
+    u64 gb = 1ull << 30;
+    return (pages * 4096 + gb - 1) / gb * gb;
+}
+
 // ==========================
 // ===  Time              ===
 // ==========================

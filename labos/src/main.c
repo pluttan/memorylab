@@ -1,4 +1,5 @@
 // labos: memory experiments on bare hardware, graphs on the screen, control over the network.
+#include "exp_rowconf.h"
 #include "gfx.h"
 #include "lib.h"
 #include "net.h"
@@ -44,16 +45,49 @@ static void draw_demo(void) {
     gfx_present();
 }
 
+static char shown_status[128];
+
 // The bottom line shows the address labctl needs; redrawn when it changes
 static void update_status(void) {
-    static char shown[64];
-    char ip[32], text[64];
+    char *shown = shown_status;
+    char ip[32], text[128];
     net_status(ip, sizeof ip);
-    fmt(text, sizeof text, "labos · %s · Esc: перезагрузка", ip);
-    if (!strncmp(text, shown, sizeof shown)) return;
-    memcpy(shown, text, sizeof shown);
+    fmt(text, sizeof text, "labos · %s · 1: опыт 1 · Esc: перезагрузка", ip);
+    if (!strncmp(text, shown, sizeof shown_status)) return;
+    memcpy(shown, text, sizeof shown_status);
     draw_status(text);
     gfx_present();
+}
+
+// ==========================
+// ===  Experiments       ===
+// ==========================
+
+static rowconf_result *rowconf;
+
+static int run_rowconf(int rounds) {
+    if (!rowconf) rowconf = alloc_pages((sizeof *rowconf + 4095) / 4096);
+    if (!rowconf || !rowconf_run(rowconf, rounds)) return 0;
+    rowconf_draw(rowconf);
+    shown_status[0] = 0;  // the graph covered the status line
+    update_status();
+    return 1;
+}
+
+static int parse_int(const char *s, int fallback) {
+    int v = 0, any = 0;
+    while (*s == ' ') s++;
+    for (; *s >= '0' && *s <= '9'; s++, any = 1) v = v * 10 + (*s - '0');
+    return any ? v : fallback;
+}
+
+// "run rowconf [rounds]"
+static usize cmd_run(const char *args, u8 *out, usize cap) {
+    if (!strncmp(args, "rowconf", 7)) {
+        if (!run_rowconf(parse_int(args + 7, 15))) return fmt((char *)out, cap, "error: no memory");
+        return rowconf_report(rowconf, out, cap);
+    }
+    return fmt((char *)out, cap, "error: unknown experiment '%s'", args);
 }
 
 efi_status efi_main(efi_handle image, efi_system_table *st) {
@@ -66,15 +100,22 @@ efi_status efi_main(efi_handle image, efi_system_table *st) {
     log_line("labos: start, firmware revision %x, TSC %.3f GHz", st->firmware_revision, tsc_per_ns);
     if (!gfx_init()) return EFI_ERR(1);
     draw_demo();
-    if (net_init() && !remote_init()) log_line("labos: no memory for the remote buffer");
+    if (net_init()) {
+        if (remote_init()) {
+            remote_register("run", cmd_run);
+        } else {
+            log_line("labos: no memory for the remote buffer");
+        }
+    }
     log_line("labos: ready");
     u64 reset_at = 0;
     for (;;) {
         net_poll();
         update_status();
         efi_input_key key;
-        if (ST->con_in->read_key_stroke(ST->con_in, &key) == EFI_SUCCESS && key.scan_code == SCAN_ESC) {
-            remote_reset_requested = 1;
+        if (ST->con_in->read_key_stroke(ST->con_in, &key) == EFI_SUCCESS) {
+            if (key.scan_code == SCAN_ESC) remote_reset_requested = 1;
+            if (key.unicode_char == '1') run_rowconf(15);
         }
         if (remote_reset_requested && !reset_at) reset_at = now_us() + 200000;
         if (reset_at && now_us() > reset_at) {

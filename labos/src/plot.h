@@ -12,6 +12,7 @@ typedef struct {
     int log_x;  // base 2 logarithmic x axis (cache sizes)
     axis_kind x_kind;
     const char *title, *x_label, *y_label;
+    int legend_row;  // a row under the title for a long legend
     i32 fx, fy, fw, fh;  // the field inside the axes, set by plot_frame
 } plot;
 
@@ -23,6 +24,7 @@ typedef struct {
 void plot_frame(plot *p);
 void plot_line(const plot *p, const double *xs, const double *ys, usize n, u32 color);
 void plot_dots(const plot *p, const double *xs, const double *ys, usize n, u32 color);
+void plot_hline(const plot *p, double y, u32 color);
 void plot_legend(const plot *p, const legend_item *items, usize n);
 
 // Smallest and largest of n values, for the axis ranges

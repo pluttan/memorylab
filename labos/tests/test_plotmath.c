@@ -56,6 +56,18 @@ static void test_format_bytes(void) {
     CHECK(!strcmp(s, "32 КБ"));
     format_bytes(s, sizeof s, 1.5 * 1048576);
     CHECK(!strcmp(s, "1,5 МБ"));
+    format_bytes(s, sizeof s, 1.25 * 1048576);
+    CHECK(!strcmp(s, "1,25 МБ"));
+    format_number(s, sizeof s, 0.2, 1);
+    CHECK(!strcmp(s, "0,2"));
+    CHECK(nice_step_bytes(0, 2097152, 11) == 262144);
+    CHECK(nice_step_bytes(0, 100, 4) == 32);
+    format_count(s, sizeof s, 131072);
+    CHECK(!strcmp(s, "131 072"));
+    format_count(s, sizeof s, 512);
+    CHECK(!strcmp(s, "512"));
+    format_count(s, sizeof s, 1048576);
+    CHECK(!strcmp(s, "1 048 576"));
 }
 
 static void test_fmt(void) {

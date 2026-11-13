@@ -25,6 +25,10 @@ OBJ := $(patsubst src/%.c,$(BUILD)/obj/%.o,$(SRC))
 # The UEFI ABI is the Microsoft x64 one; no red zone because firmware interrupts use our stack
 CFLAGS := -target x86_64-unknown-windows -ffreestanding -fno-builtin -fno-stack-protector -fno-stack-check \
 	-mno-stack-arg-probe -mno-red-zone -fshort-wchar -O2 -std=c11 -Wall -Wextra -Werror -Isrc
+# make build SYNTHETIC=1: experiment 1 takes its times from a DRAM model, to check the drawing in QEMU
+ifeq ($(SYNTHETIC),1)
+CFLAGS += -DROWCONF_SYNTHETIC
+endif
 LDFLAGS := /subsystem:efi_application /entry:efi_main /nodefaultlib /machine:x64
 
 # Absolute paths: with -daemonize QEMU changes to / and opens the FAT directory lazily
@@ -35,7 +39,7 @@ QEMU_ARGS := -machine q35 -cpu max -m 1G -smp 1 \
 	-netdev user,id=net0,hostfwd=udp:127.0.0.1:$(PORT)-:5555 -device e1000,netdev=net0 \
 	-serial file:$(ABS)/serial.log
 
-.PHONY: all build venv font test qemu qemu-headless screenshot stop clean help ping remote-log remote-screen
+.PHONY: all build venv font test qemu qemu-headless screenshot stop clean help ping remote-log remote-screen usb
 
 all: build
 
@@ -50,6 +54,7 @@ help:
 	@echo "make ping           - спросить labos по сети (HOST=$(HOST) PORT=$(PORT))"
 	@echo "make remote-log     - журнал labos по сети"
 	@echo "make remote-screen  - снимок экрана labos по сети в $(BUILD)/remote.png"
+	@echo "make usb VOLUME=/Volumes/LABOS - записать labos на флешку FAT32"
 
 build: $(EFI)
 
@@ -73,8 +78,10 @@ font: $(VENV)
 test: | $(BUILD)
 	cc -O1 -Wall -Wextra -Werror -Isrc tests/test_plotmath.c src/plotmath.c src/fmt.c -o $(BUILD)/test_plotmath
 	cc -O1 -Wall -Wextra -Werror -Isrc tests/test_netpkt.c src/netpkt.c -o $(BUILD)/test_netpkt
+	cc -O1 -Wall -Wextra -Werror -Isrc tests/test_analysis.c src/analysis.c -o $(BUILD)/test_analysis
 	$(BUILD)/test_plotmath
 	$(BUILD)/test_netpkt
+	$(BUILD)/test_analysis
 
 $(BUILD):
 	mkdir -p $@
@@ -102,6 +109,12 @@ remote-log: $(VENV)
 
 remote-screen: $(VENV) | $(BUILD)
 	$(LABCTL) screen $(BUILD)/remote.png
+
+usb: build
+	@[ -n "$(VOLUME)" ] && [ -d "$(VOLUME)" ] || { echo "Укажите флешку FAT32: make usb VOLUME=/Volumes/LABOS"; exit 1; }
+	mkdir -p "$(VOLUME)/EFI/BOOT"
+	cp $(EFI) "$(VOLUME)/EFI/BOOT/BOOTX64.EFI"
+	@echo "Готово: $(VOLUME)/EFI/BOOT/BOOTX64.EFI"
 
 clean:
 	rm -rf $(BUILD)

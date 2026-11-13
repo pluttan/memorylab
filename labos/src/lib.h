@@ -20,6 +20,8 @@ void *alloc(usize size);
 void release(void *ptr);
 // Physically contiguous pages; UEFI maps memory one to one, so the address is both virtual and physical
 void *alloc_pages(usize pages);
+// RAM in the UEFI memory map (usable, firmware and ACPI), rounded up to a whole GB
+u64 memory_total_bytes(void);
 
 // TSC clock, calibrated against the firmware Stall() at start
 static inline u64 rdtsc(void) {
