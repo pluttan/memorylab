@@ -3,20 +3,22 @@
 #include "exp.h"
 #include "gfx.h"
 #include "lib.h"
+#include "manual.h"
 #include "net.h"
+#include "player.h"
 #include "plotmath.h"
 #include "widgets.h"
 
 #define PAD 24
 #define INSET 28
-#define COL_BOX 0x1e1e2e  // Catppuccin base: value boxes inside the field
 
-typedef enum { MODE_MENU, MODE_RESULT } ui_mode;
+typedef enum { MODE_MENU, MODE_RESULT, MODE_MANUAL, MODE_FILM } ui_mode;
 
 int ui_reset_requested;
 
 static struct {
     ui_mode mode;
+    ui_mode back;  // where Esc leads from the manual and the film
     int selected;
     int focus_params;
     int row;
@@ -26,23 +28,27 @@ static struct {
     char status[192];
 } U;
 
+static void redraw(void);
+
 // ==========================
 // ===  Keys              ===
 // ==========================
 
 ui_key ui_key_from_efi(u16 scan, u16 ch) {
-    switch (scan) {
-        case 0x01: return (ui_key){KEY_UP, 0};
-        case 0x02: return (ui_key){KEY_DOWN, 0};
-        case 0x03: return (ui_key){KEY_RIGHT, 0};
-        case 0x04: return (ui_key){KEY_LEFT, 0};
-        case 0x14: return (ui_key){KEY_F10, 0};
-        case 0x17: return (ui_key){KEY_ESC, 0};
+    static const struct {
+        u16 scan;
+        key_kind kind;
+    } scans[] = {{0x01, KEY_UP},   {0x02, KEY_DOWN}, {0x03, KEY_RIGHT}, {0x04, KEY_LEFT},
+                 {0x05, KEY_HOME}, {0x06, KEY_END},  {0x09, KEY_PGUP},  {0x0a, KEY_PGDN},
+                 {0x0b, KEY_F1},   {0x0c, KEY_F2},   {0x14, KEY_F10},   {0x17, KEY_ESC}};
+    for (usize i = 0; i < sizeof scans / sizeof scans[0]; i++) {
+        if (scans[i].scan == scan) return (ui_key){scans[i].kind, 0};
     }
     if (ch == '\r' || ch == '\n') return (ui_key){KEY_ENTER, 0};
     if (ch == '\t') return (ui_key){KEY_TAB, 0};
     if (ch == 8) return (ui_key){KEY_BACKSPACE, 0};
-    if (ch >= 0x20 && ch < 0x7f) return (ui_key){KEY_CHAR, (char)ch};
+    if (ch == ' ') return (ui_key){KEY_SPACE, 0};
+    if (ch > 0x20 && ch < 0x7f) return (ui_key){KEY_CHAR, (char)ch};
     return (ui_key){KEY_NONE, 0};
 }
 
@@ -50,9 +56,10 @@ ui_key ui_key_from_name(const char *name) {
     static const struct {
         const char *name;
         key_kind kind;
-    } names[] = {{"up", KEY_UP},       {"down", KEY_DOWN},           {"left", KEY_LEFT}, {"right", KEY_RIGHT},
-                 {"tab", KEY_TAB},     {"enter", KEY_ENTER},         {"esc", KEY_ESC},   {"backspace", KEY_BACKSPACE},
-                 {"f10", KEY_F10}};
+    } names[] = {{"up", KEY_UP},     {"down", KEY_DOWN},   {"left", KEY_LEFT}, {"right", KEY_RIGHT},
+                 {"tab", KEY_TAB},   {"enter", KEY_ENTER}, {"esc", KEY_ESC},   {"backspace", KEY_BACKSPACE},
+                 {"f1", KEY_F1},     {"f2", KEY_F2},       {"f10", KEY_F10},   {"space", KEY_SPACE},
+                 {"pgup", KEY_PGUP}, {"pgdn", KEY_PGDN},   {"home", KEY_HOME}, {"end", KEY_END}};
     for (usize i = 0; i < sizeof names / sizeof names[0]; i++) {
         if (!strncmp(name, names[i].name, strlen(names[i].name) + 1)) return (ui_key){names[i].kind, 0};
     }
@@ -65,20 +72,33 @@ ui_key ui_key_from_name(const char *name) {
 // ==========================
 
 static i32 status_height(void) { return gfx_line_height() + 12; }
+static i32 content_height(void) { return (i32)screen.height - status_height(); }
 
 static const char *hints(void) {
-    if (U.mode == MODE_RESULT) return "Esc: в меню    Enter: повторить опыт    F10: перезагрузка";
-    if (U.focus_params) {
-        return "Вверх/вниз: параметр    Цифры: ввод    Влево/вправо: меньше/больше    Enter: запуск    Tab: назад";
+    switch (U.mode) {
+        case MODE_RESULT: return "Esc: в меню    Enter: повторить    F1: методичка    F2: ролик    F10: перезагрузка";
+        case MODE_MANUAL: return "Вверх/вниз, PgUp/PgDn: листать    Влево/вправо: раздел    F2: ролик    Esc: назад";
+        case MODE_FILM: return "";
+        case MODE_MENU: break;
     }
-    return "Вверх/вниз: опыт    Tab: параметры    Enter: запуск    F10: перезагрузка";
+    if (U.focus_params) return "Вверх/вниз: параметр    Цифры: ввод    Влево/вправо: меньше/больше    Enter: запуск";
+    return "Вверх/вниз: опыт    Tab: параметры    Enter: запуск    F1: методичка    F2: ролик";
+}
+
+static void right_text(char *out, usize size) {
+    char ip[32];
+    net_status(ip, sizeof ip);
+    if (U.mode == MODE_MANUAL) {
+        fmt(out, size, "методичка %d%%  ·  %s", manual_percent(), ip);
+    } else {
+        fmt(out, size, "labos  ·  %s", ip);
+    }
 }
 
 static void draw_status(void) {
     i32 h = status_height(), y = screen.height - h;
-    char ip[32], right[64];
-    net_status(ip, sizeof ip);
-    fmt(right, sizeof right, "labos · %s", ip);
+    char right[64];
+    right_text(right, sizeof right);
     gfx_fill(0, y, screen.width, h, COL_GRID);
     gfx_text(16, y + 6, hints(), COL_TEXT);
     gfx_text(screen.width - 16 - gfx_text_width(right), y + 6, right, COL_SUBTEXT);
@@ -86,13 +106,16 @@ static void draw_status(void) {
 }
 
 void ui_tick(void) {
-    char ip[32], right[64], now[192];
-    net_status(ip, sizeof ip);
-    fmt(right, sizeof right, "labos · %s", ip);
+    if (U.mode == MODE_FILM) {
+        player_tick();
+        return;
+    }
+    char right[64], now[192];
+    right_text(right, sizeof right);
     fmt(now, sizeof now, "%s|%s", hints(), right);
     if (!strncmp(now, U.status, sizeof now)) return;
     draw_status();
-    gfx_present();
+    gfx_present_rect(0, (i32)screen.height - status_height(), (i32)screen.width, status_height());
 }
 
 // ==========================
@@ -162,8 +185,17 @@ static i32 draw_params(const experiment *e, i32 x, i32 y, i32 width) {
     return y - top;
 }
 
+// A framed key label; returns its width
+static i32 button(i32 x, i32 y, const char *text, u32 color) {
+    i32 lh = gfx_line_height(), w = gfx_text_width(text) + 40;
+    gfx_fill(x, y, w, lh + 16, color);
+    gfx_fill(x + 2, y + 2, w - 4, lh + 12, COL_BOX);
+    gfx_text(x + 20, y + 8, text, color);
+    return w;
+}
+
 static void draw_menu(void) {
-    i32 lh = gfx_line_height(), bottom = screen.height - status_height() - PAD;
+    i32 lh = gfx_line_height(), bottom = content_height() - PAD;
     gfx_fill(0, 0, screen.width, screen.height, COL_OUTER);
     gfx_text(PAD, 16, "Организация памяти конвейерных суперскалярных ЭВМ", COL_TEXT);
     i32 y = 16 + lh + 16, h = bottom - y;
@@ -180,14 +212,13 @@ static void draw_menu(void) {
     gfx_text(x, ty, "Параметры", COL_MAUVE);
     ty += lh + 10;
     ty += draw_params(e, x, ty, width) + 24;
-    if (e->run) {
-        const char *run = "Enter: запустить";
-        i32 bw = gfx_text_width(run) + 40;
-        gfx_fill(x, ty, bw, lh + 16, COL_GREEN);
-        gfx_fill(x + 2, ty + 2, bw - 4, lh + 12, COL_BOX);
-        gfx_text(x + 20, ty + 8, run, COL_GREEN);
-        ty += lh + 16;
-    } else {
+    i32 bx = x;
+    if (e->run) bx += button(bx, ty, "Enter: запустить", COL_GREEN) + 16;
+    bx += button(bx, ty, "F1: методичка", COL_MAUVE) + 16;
+    if (e->film) button(bx, ty, "F2: ролик", COL_BLUE);
+    ty += lh + 16;
+    if (!e->run) {
+        ty += 16;
         ty += wrap_text(x, ty, width, "Этот опыт ещё не перенесён в labos. Пока проведите его в тетради memorylab.",
                         COL_PEACH);
     }
@@ -196,11 +227,17 @@ static void draw_menu(void) {
 }
 
 static void redraw(void) {
-    if (U.mode == MODE_RESULT) {
-        experiments[U.selected].draw(screen.height - status_height());
-        draw_status();
-    } else {
-        draw_menu();
+    switch (U.mode) {
+        case MODE_RESULT:
+            experiments[U.selected].draw(content_height());
+            draw_status();
+            break;
+        case MODE_MANUAL:
+            manual_draw();
+            draw_status();
+            break;
+        case MODE_MENU: draw_menu(); break;
+        case MODE_FILM: return;  // the player draws
     }
     gfx_present();
 }
@@ -217,29 +254,82 @@ int ui_find(const char *id) {
     return -1;
 }
 
-static void select_experiment(int index);
+static void show_message(const char *text, u32 color) {
+    U.message = text;
+    U.message_color = color;
+    U.mode = MODE_MENU;
+}
+
+// ==========================
+// ===  Manual and films  ===
+// ==========================
+
+static void leave_film(void) {
+    player_close();
+    U.mode = U.back;
+}
+
+int ui_open_manual(const char *section) {
+    if (U.mode == MODE_FILM) leave_film();
+    if (U.mode != MODE_MANUAL) U.back = U.mode;
+    if (!manual_open(section, content_height())) {
+        show_message(manual_error(), COL_PEACH);
+        redraw();
+        return 0;
+    }
+    U.mode = MODE_MANUAL;
+    redraw();
+    return 1;
+}
+
+int ui_play(const char *film) {
+    if (U.mode == MODE_FILM) leave_film();
+    if (!film) {
+        if (U.mode == MODE_MENU) show_message("У этого раздела нет ролика.", COL_PEACH);
+        redraw();
+        return 0;
+    }
+    ui_mode from = U.mode;
+    if (!player_open(film)) {
+        show_message(player_error(), COL_PEACH);
+        redraw();
+        return 0;
+    }
+    U.back = from;
+    U.mode = MODE_FILM;
+    return 1;
+}
+
+// ==========================
+// ===  Experiments       ===
+// ==========================
+
+static void select_experiment(int index) {
+    if (index < 0 || index >= experiment_count) return;
+    edit_cancel(&U.edit);
+    U.selected = index;
+    U.row = 0;
+    U.message = 0;
+    if (!experiments[index].nparams) U.focus_params = 0;
+}
 
 int ui_run(int index) {
     experiment *e = &experiments[index];
+    if (U.mode == MODE_FILM) leave_film();
     if (index != U.selected) {
         select_experiment(index);
     } else if (e->nparams) {
         edit_commit(&U.edit, &e->params[U.row]);
     }
     if (!e->run) {
-        U.mode = MODE_MENU;
-        U.message = "Этот опыт пока проводится только в тетради memorylab.";
-        U.message_color = COL_PEACH;
+        show_message("Этот опыт пока проводится только в тетради memorylab.", COL_PEACH);
         redraw();
         return 0;
     }
-    U.mode = MODE_MENU;
-    U.message = "Идёт опыт, подождите…";
-    U.message_color = COL_PEACH;
+    show_message("Идёт опыт, подождите…", COL_PEACH);
     redraw();
     if (!e->run(e->params)) {
-        U.message = "Опыту не хватило памяти.";
-        U.message_color = COL_RED;
+        show_message("Опыту не хватило памяти.", COL_RED);
         redraw();
         return 0;
     }
@@ -252,15 +342,6 @@ int ui_run(int index) {
 // ==========================
 // ===  Key handling      ===
 // ==========================
-
-static void select_experiment(int index) {
-    if (index < 0 || index >= experiment_count) return;
-    edit_cancel(&U.edit);
-    U.selected = index;
-    U.row = 0;
-    U.message = 0;
-    if (!experiments[index].nparams) U.focus_params = 0;
-}
 
 static void key_in_list(ui_key k) {
     if (k.kind == KEY_UP) select_experiment(U.selected - 1);
@@ -300,17 +381,62 @@ static void key_in_params(ui_key k) {
     }
 }
 
+static void key_in_manual(ui_key k) {
+    i32 step = 3 * (gfx_line_height() + 4);
+    switch (k.kind) {
+        case KEY_UP: manual_scroll(-step); break;
+        case KEY_DOWN: manual_scroll(step); break;
+        case KEY_PGUP: manual_page(-1); break;
+        case KEY_PGDN:
+        case KEY_SPACE: manual_page(1); break;
+        case KEY_HOME: manual_edge(0); break;
+        case KEY_END: manual_edge(1); break;
+        case KEY_LEFT: manual_section_step(-1); break;
+        case KEY_RIGHT: manual_section_step(1); break;
+        case KEY_ESC:
+        case KEY_BACKSPACE: U.mode = U.back; break;
+        default: break;
+    }
+}
+
+static void key_in_film(ui_key k) {
+    switch (k.kind) {
+        case KEY_SPACE: player_toggle_pause(); break;
+        case KEY_LEFT: player_seek(-10); break;
+        case KEY_RIGHT: player_seek(10); break;
+        case KEY_HOME: player_restart(); break;
+        case KEY_ESC:
+        case KEY_BACKSPACE:
+            leave_film();
+            redraw();
+            break;
+        default: break;
+    }
+}
+
 void ui_handle(ui_key k) {
     if (k.kind == KEY_NONE) return;
     if (k.kind == KEY_F10) {
         ui_reset_requested = 1;
         return;
     }
-    if (k.kind == KEY_ENTER) {
-        ui_run(U.selected);
+    if (U.mode == MODE_FILM) {
+        key_in_film(k);
         return;
     }
-    if (U.mode == MODE_RESULT) {
+    if (k.kind == KEY_F2) {
+        ui_play(U.mode == MODE_MANUAL ? manual_film() : experiments[U.selected].film);
+        return;
+    }
+    if (U.mode == MODE_MANUAL) {
+        key_in_manual(k);
+    } else if (k.kind == KEY_F1) {
+        ui_open_manual(experiments[U.selected].id);
+        return;
+    } else if (k.kind == KEY_ENTER) {
+        ui_run(U.selected);
+        return;
+    } else if (U.mode == MODE_RESULT) {
         if (k.kind == KEY_ESC || k.kind == KEY_BACKSPACE) U.mode = MODE_MENU;
     } else if (U.focus_params) {
         key_in_params(k);

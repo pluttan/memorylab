@@ -12,6 +12,7 @@ typedef struct {
     const char *title;
     const char *tasks;        // tasks of the lab manual it serves
     const char *about;
+    const char *film;         // labos/films/<film>-<height>.lfilm, or 0
     exp_param params[MAX_PARAMS];
     int nparams;
     // Measures and keeps the result; 0 when it could not run (no memory)

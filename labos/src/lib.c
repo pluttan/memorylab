@@ -69,6 +69,17 @@ void release(void *ptr) {
     if (ptr) BS->free_pool(ptr);
 }
 
+// For third party code (h264bsd): third_party/libc/stdlib.h declares these
+void *malloc(usize size) { return alloc(size); }
+
+void *calloc(usize count, usize size) {
+    void *ptr = alloc(count * size);
+    if (ptr) memset(ptr, 0, count * size);
+    return ptr;
+}
+
+void free(void *ptr) { release(ptr); }
+
 void *alloc_pages(usize pages) {
     efi_phys_addr addr = 0;
     if (BS->allocate_pages(EFI_ALLOCATE_ANY_PAGES, EFI_LOADER_DATA, pages, &addr) != EFI_SUCCESS) return 0;
@@ -145,6 +156,17 @@ static void serial_put(char c) {
     for (int i = 0; i < 100000 && !(inb(COM1 + 5) & 0x20); i++) {
     }
     outb(COM1, (u8)c);
+}
+
+// The error messages of h264bsd (third_party/libc/stdio.h)
+void labos_log_printf(const char *format, ...) {
+    char text[256];
+    va_list ap;
+    va_start(ap, format);
+    usize n = vfmt(text, sizeof text, format, ap);
+    va_end(ap);
+    if (n && n < sizeof text && text[n - 1] == '\n') text[n - 1] = 0;
+    log_line("h264bsd: %s", text);
 }
 
 void log_line(const char *format, ...) {

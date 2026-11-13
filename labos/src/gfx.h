@@ -17,6 +17,7 @@
 #define COL_BLUE 0x89b4fa
 #define COL_PEACH 0xfab387
 #define COL_TEAL 0x94e2d5
+#define COL_BOX 0x1e1e2e  // Catppuccin base: boxes inside the field
 
 typedef struct {
     u32 *pixels;
@@ -27,6 +28,10 @@ extern surface screen;
 
 int gfx_init(void);
 void gfx_present(void);
+void gfx_present_rect(i32 x, i32 y, i32 w, i32 h);
+
+// While set, drawing only measures: the layout of a long page runs once to learn its height
+extern int gfx_dry;
 
 void gfx_fill(i32 x, i32 y, i32 w, i32 h, u32 rgb);
 void gfx_line(i32 x0, i32 y0, i32 x1, i32 y1, u32 rgb, int thickness);

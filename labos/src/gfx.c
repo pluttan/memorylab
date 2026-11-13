@@ -33,34 +33,44 @@ int gfx_init(void) {
     return 1;
 }
 
-void gfx_present(void) {
+int gfx_dry;
+
+void gfx_present_rect(i32 x, i32 y, i32 w, i32 h) {
+    if (x < 0) w += x, x = 0;
+    if (y < 0) h += y, y = 0;
+    if (x + w > (i32)screen.width) w = (i32)screen.width - x;
+    if (y + h > (i32)screen.height) h = (i32)screen.height - y;
+    if (w <= 0 || h <= 0) return;
     u32 *fb = (u32 *)gop->mode->frame_buffer_base;
     u32 stride = gop->mode->info->pixels_per_scan_line;
-    for (u32 y = 0; y < screen.height; y++) {
-        u32 *src = screen.pixels + (usize)y * screen.width;
-        u32 *dst = fb + (usize)y * stride;
+    for (i32 row = y; row < y + h; row++) {
+        u32 *src = screen.pixels + (usize)row * screen.width + x;
+        u32 *dst = fb + (usize)row * stride + x;
         if (!swap_rb) {
-            memcpy(dst, src, screen.width * 4);
+            memcpy(dst, src, (usize)w * 4);
             continue;
         }
-        for (u32 x = 0; x < screen.width; x++) {
-            u32 c = src[x];
-            dst[x] = (c & 0x00ff00) | ((c >> 16) & 0xff) | ((c & 0xff) << 16);
+        for (i32 i = 0; i < w; i++) {
+            u32 c = src[i];
+            dst[i] = (c & 0x00ff00) | ((c >> 16) & 0xff) | ((c & 0xff) << 16);
         }
     }
 }
+
+void gfx_present(void) { gfx_present_rect(0, 0, (i32)screen.width, (i32)screen.height); }
 
 // ==========================
 // ===  Shapes            ===
 // ==========================
 
 static inline void plot_pixel(i32 x, i32 y, u32 rgb) {
-    if (x >= 0 && y >= 0 && (u32)x < screen.width && (u32)y < screen.height) {
+    if (!gfx_dry && x >= 0 && y >= 0 && (u32)x < screen.width && (u32)y < screen.height) {
         screen.pixels[(usize)y * screen.width + x] = rgb;
     }
 }
 
 void gfx_fill(i32 x, i32 y, i32 w, i32 h, u32 rgb) {
+    if (gfx_dry) return;
     i32 x1 = x + w, y1 = y + h;
     if (x < 0) x = 0;
     if (y < 0) y = 0;
@@ -104,6 +114,7 @@ void gfx_line(i32 x0, i32 y0, i32 x1, i32 y1, u32 rgb, int thickness) {
 // ==========================
 
 static int find_glyph(u32 code) {
+    if (code < 0x20) return -1;  // control characters (colour switches of rich text) take no room
     int lo = 0, hi = FONT_GLYPHS - 1;
     while (lo <= hi) {
         int mid = (lo + hi) / 2;
@@ -129,7 +140,7 @@ i32 gfx_text_n(i32 x, i32 y, const char *utf8, usize length, u32 rgb) {
         if (g < 0) continue;
         const u8 *alpha = font_alpha + font_glyphs[g].offset;
         i32 gx = x + font_glyphs[g].left, gy = y + font_glyphs[g].top;
-        for (i32 j = 0; j < font_glyphs[g].h; j++) {
+        for (i32 j = 0; j < font_glyphs[g].h && !gfx_dry; j++) {
             for (i32 i = 0; i < font_glyphs[g].w; i++) {
                 u32 a = alpha[j * font_glyphs[g].w + i];
                 i32 px = gx + i, py = gy + j;

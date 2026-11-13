@@ -2,7 +2,9 @@
 #include "exp.h"
 #include "gfx.h"
 #include "lib.h"
+#include "manual.h"
 #include "net.h"
+#include "player.h"
 #include "remote.h"
 #include "ui.h"
 
@@ -50,6 +52,25 @@ static usize cmd_key(const char *args, u8 *out, usize cap) {
     return fmt((char *)out, cap, "ok %d", pressed);
 }
 
+// "manual [section]": the manual at an experiment id, intro or questions
+static usize cmd_manual(const char *args, u8 *out, usize cap) {
+    char word[32];
+    if (!ui_open_manual(next_word(&args, word, sizeof word))) return fmt((char *)out, cap, "error: %s", manual_error());
+    return fmt((char *)out, cap, "ok %d%%", manual_percent());
+}
+
+// "film <exp1..exp7>": plays a film; "player": what the player is doing
+static usize cmd_film(const char *args, u8 *out, usize cap) {
+    char word[32];
+    if (!ui_play(next_word(&args, word, sizeof word))) return fmt((char *)out, cap, "error: %s", player_error());
+    return player_state((char *)out, cap);
+}
+
+static usize cmd_player(const char *args, u8 *out, usize cap) {
+    (void)args;
+    return player_state((char *)out, cap);
+}
+
 // "menu": every experiment with its parameters
 static usize cmd_menu(const char *args, u8 *out, usize cap) {
     (void)args;
@@ -81,6 +102,9 @@ efi_status efi_main(efi_handle image, efi_system_table *st) {
             remote_register("run", cmd_run);
             remote_register("key", cmd_key);
             remote_register("menu", cmd_menu);
+            remote_register("manual", cmd_manual);
+            remote_register("film", cmd_film);
+            remote_register("player", cmd_player);
         } else {
             log_line("labos: no memory for the remote buffer");
         }

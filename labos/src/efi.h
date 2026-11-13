@@ -286,4 +286,47 @@ typedef struct efi_snp {
     efi_snp_mode *mode;
 } efi_snp;
 
+// ==========================
+// ===  Files             ===
+// ==========================
+
+#define EFI_LOADED_IMAGE_GUID {0x5b1b31a1, 0x9562, 0x11d2, {0x8e, 0x3f, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b}}
+#define EFI_SIMPLE_FS_GUID {0x964e5b22, 0x6459, 0x11d2, {0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b}}
+
+typedef struct {
+    u32 revision;
+    efi_handle parent_handle;
+    efi_system_table *system_table;
+    efi_handle device_handle;
+    void *file_path;
+    void *reserved;
+    u32 load_options_size;
+    void *load_options;
+    void *image_base;
+    u64 image_size;
+    u32 image_code_type, image_data_type;
+    void *unload;
+} efi_loaded_image;
+
+#define EFI_FILE_MODE_READ 1ULL
+
+typedef struct efi_file {
+    u64 revision;
+    efi_status (*open)(struct efi_file *self, struct efi_file **out, const char16 *name, u64 mode, u64 attributes);
+    efi_status (*close)(struct efi_file *self);
+    void *delete_file;
+    efi_status (*read)(struct efi_file *self, usize *size, void *buffer);
+    void *write;
+    efi_status (*get_position)(struct efi_file *self, u64 *position);
+    efi_status (*set_position)(struct efi_file *self, u64 position);
+    void *get_info;
+    void *set_info;
+    void *flush;
+} efi_file;
+
+typedef struct efi_simple_fs {
+    u64 revision;
+    efi_status (*open_volume)(struct efi_simple_fs *self, efi_file **root);
+} efi_simple_fs;
+
 #endif

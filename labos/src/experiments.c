@@ -20,6 +20,7 @@ experiment experiments[] = {
     },
     {
         .id = "rowconf",
+        .film = "exp1",
         .short_title = "1. Расслоение памяти",
         .title = "Опыт 1. Расслоение динамической памяти",
         .tasks = "Задание 3",
@@ -34,6 +35,7 @@ experiment experiments[] = {
     },
     {
         .id = "list_vs_array",
+        .film = "exp2",
         .short_title = "2. Списки и массивы",
         .title = "Опыт 2. Ссылочные и векторные структуры",
         .tasks = "Задание 4",
@@ -47,6 +49,7 @@ experiment experiments[] = {
     },
     {
         .id = "prefetch",
+        .film = "exp3",
         .short_title = "3. Предвыборка",
         .title = "Опыт 3. Программная предвыборка",
         .tasks = "Задание 5",
@@ -60,6 +63,7 @@ experiment experiments[] = {
     },
     {
         .id = "memory_read_optimization",
+        .film = "exp4",
         .short_title = "4. Чтение потоков",
         .title = "Опыт 4. Эффективное чтение оперативной памяти",
         .tasks = "Задание 6",
@@ -70,6 +74,7 @@ experiment experiments[] = {
     },
     {
         .id = "cache_conflicts",
+        .film = "exp5",
         .short_title = "5. Конфликты в кэше",
         .title = "Опыт 5. Конфликты в кэш-памяти",
         .tasks = "Задание 7",
@@ -83,6 +88,7 @@ experiment experiments[] = {
     },
     {
         .id = "cache_performance",
+        .film = "exp6",
         .short_title = "6. Производительность кэша",
         .title = "Опыт 6. Производительность кэш-памяти",
         .tasks = "Задание 8",
@@ -93,6 +99,7 @@ experiment experiments[] = {
     },
     {
         .id = "sorting_algorithms",
+        .film = "exp7",
         .short_title = "7. Сортировки",
         .title = "Опыт 7. Сравнение алгоритмов сортировки",
         .tasks = "Задание 9",
