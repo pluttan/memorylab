@@ -8,4 +8,7 @@
 void *fs_read(const char *path, usize *size);
 void fs_release(void *data, usize size);
 
+// Writes a whole file, replacing an old one and creating the directories on the way; 1 on success
+int fs_write(const char *path, const void *data, usize size);
+
 #endif

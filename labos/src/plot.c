@@ -7,13 +7,13 @@
 #define PAD 12
 #define TICK 6
 
-static i32 to_x(const plot *p, double v) {
-    return (i32)axis_pos(v, p->x0, p->x1, p->log_x, p->fx, p->fx + p->fw);
+static double fx_of(const plot *p, double v) { return axis_pos(v, p->x0, p->x1, p->log_x, p->fx, p->fx + p->fw); }
+static double fy_of(const plot *p, double v) {
+    if (p->log_y && v < p->y0) v = p->y0;
+    return axis_pos(v, p->y0, p->y1, p->log_y, p->fy + p->fh, p->fy);
 }
-
-static i32 to_y(const plot *p, double v) {
-    return (i32)axis_pos(v, p->y0, p->y1, 0, p->fy + p->fh, p->fy);
-}
+static i32 to_x(const plot *p, double v) { return (i32)fx_of(p, v); }
+static i32 to_y(const plot *p, double v) { return (i32)fy_of(p, v); }
 
 static void tick_label(char *out, usize size, double v, double step, axis_kind kind) {
     if (kind == AXIS_BYTES) {
@@ -60,17 +60,29 @@ static void x_ticks(const plot *p, i32 label_y) {
     }
 }
 
+static void y_tick(const plot *p, double v, const char *text) {
+    i32 y = to_y(p, v);
+    gfx_line(p->fx, y, p->fx + p->fw, y, COL_GRID, 1);
+    gfx_line(p->fx - TICK, y, p->fx, y, COL_AXIS, 1);
+    gfx_text(p->fx - TICK - 4 - gfx_text_width(text), y - gfx_line_height() / 2, text, COL_SUBTEXT);
+}
+
 static void y_ticks(const plot *p) {
     char text[32];
+    if (p->log_y) {
+        for (double v = 1; v <= p->y1 * 1.0001; v *= 10) {
+            if (v < p->y0) continue;
+            format_count(text, sizeof text, (u64)v);
+            y_tick(p, v, text);
+        }
+        return;
+    }
     double step = nice_step(p->y0, p->y1, p->fh / 60);
     i64 first = (i64)(p->y0 / step);
     for (double v = first * step; v <= p->y1 + step * 1e-6; v += step) {
         if (v < p->y0 - step * 1e-6) continue;
-        i32 y = to_y(p, v);
         tick_label(text, sizeof text, v, step, AXIS_NUMBER);
-        gfx_line(p->fx, y, p->fx + p->fw, y, COL_GRID, 1);
-        gfx_line(p->fx - TICK, y, p->fx, y, COL_AXIS, 1);
-        gfx_text(p->fx - TICK - 4 - gfx_text_width(text), y - gfx_line_height() / 2, text, COL_SUBTEXT);
+        y_tick(p, v, text);
     }
 }
 
@@ -79,10 +91,15 @@ void plot_frame(plot *p) {
     gfx_fill(p->x, p->y, p->w, p->h, COL_OUTER);
     if (p->x1 <= p->x0) p->x1 = p->x0 + 1;
     if (p->y1 <= p->y0) p->y1 = p->y0 + 1;
+    if (p->log_y && p->y0 <= 0) p->y0 = 0.8;
     // The widest y label decides the left margin
     char text[32];
     double step = nice_step(p->y0, p->y1, 8);
-    tick_label(text, sizeof text, p->y1, step, AXIS_NUMBER);
+    if (p->log_y) {
+        format_count(text, sizeof text, (u64)p->y1);
+    } else {
+        tick_label(text, sizeof text, p->y1, step, AXIS_NUMBER);
+    }
     i32 left = gfx_text_width(text) + TICK + 4 + PAD + lh + 4;
     p->fx = p->x + left;
     p->fy = p->y + PAD + lh + 6 + (p->legend_row ? lh + 4 : 0);
@@ -103,23 +120,57 @@ void plot_frame(plot *p) {
     if (p->y_label) gfx_text(p->fx - gfx_text_width(p->y_label) / 2, p->fy - lh - 2, p->y_label, COL_TEXT);
 }
 
+static void clip_field(const plot *p) { gfx_clip(p->fx, p->fy, p->fw + 1, p->fh + 1); }
+
 void plot_line(const plot *p, const double *xs, const double *ys, usize n, u32 color) {
+    clip_field(p);
     for (usize i = 1; i < n; i++) {
-        gfx_line(to_x(p, xs[i - 1]), to_y(p, ys[i - 1]), to_x(p, xs[i]), to_y(p, ys[i]), color, 2);
+        gfx_line_aa(fx_of(p, xs[i - 1]), fy_of(p, ys[i - 1]), fx_of(p, xs[i]), fy_of(p, ys[i]), color, 2.2);
     }
+    gfx_clip_reset();
 }
 
-void plot_dots(const plot *p, const double *xs, const double *ys, usize n, u32 color) {
-    for (usize i = 0; i < n; i++) gfx_dot(to_x(p, xs[i]), to_y(p, ys[i]), 1, color);
+void plot_dots(const plot *p, const double *xs, const double *ys, usize n, u32 color, double radius) {
+    clip_field(p);
+    for (usize i = 0; i < n; i++) gfx_dot_aa(fx_of(p, xs[i]), fy_of(p, ys[i]), radius, color);
+    gfx_clip_reset();
 }
 
 void plot_hline(const plot *p, double y, u32 color) {
     if (y < p->y0 || y > p->y1) return;
-    gfx_line(p->fx, to_y(p, y), p->fx + p->fw, to_y(p, y), color, 2);
+    clip_field(p);
+    gfx_line_aa(p->fx, fy_of(p, y), p->fx + p->fw, fy_of(p, y), color, 2);
+    gfx_clip_reset();
 }
+
+void plot_vline(const plot *p, double x, u32 color) {
+    if (x < p->x0 || x > p->x1) return;
+    gfx_vline_dashed(to_x(p, x), p->fy, p->fy + p->fh, color, 6);
+}
+
+void plot_bars(const plot *p, const double *xs, double width, const double *ys, usize n, u32 color) {
+    for (usize i = 0; i < n; i++) {
+        if (ys[i] <= (p->log_y ? p->y0 : 0)) continue;
+        i32 left = to_x(p, xs[i]), right = to_x(p, xs[i] + width), top = to_y(p, ys[i]);
+        if (right - left > 2) right--;  // a hairline gap between neighbours
+        if (left < p->fx) left = p->fx;
+        if (right > p->fx + p->fw) right = p->fx + p->fw;
+        if (top < p->fy) top = p->fy;
+        gfx_fill(left, top, right - left > 0 ? right - left : 1, p->fy + p->fh - top, color);
+    }
+}
+
+void plot_note(const plot *p, const char *text, u32 color) { gfx_text(p->fx + 12, p->fy + 8, text, color); }
 
 void plot_legend(const plot *p, const legend_item *items, usize n) {
     i32 x = p->fx + p->fw, y = p->y + PAD + (p->legend_row ? gfx_line_height() + 4 : 0);
+    // Too wide for the row next to the y unit: the legend goes inside the field, at its top right
+    i32 total = 0;
+    for (usize i = 0; i < n; i++) total += gfx_text_width(items[i].name) + 42;
+    if (p->legend_row && x - total < p->fx + gfx_text_width(p->y_label ? p->y_label : "") / 2 + 12) {
+        x -= 10;
+        y = p->fy + 8;
+    }
     for (usize i = n; i-- > 0;) {
         x -= gfx_text_width(items[i].name);
         gfx_text(x, y, items[i].name, items[i].color);
@@ -136,4 +187,10 @@ void min_max(const double *v, usize n, double *lo, double *hi) {
         if (v[i] < *lo) *lo = v[i];
         if (v[i] > *hi) *hi = v[i];
     }
+}
+
+double axis_top(const double *v, usize n) {
+    double lo, hi;
+    min_max(v, n, &lo, &hi);
+    return hi > 0 ? hi * 1.08 : 1;
 }

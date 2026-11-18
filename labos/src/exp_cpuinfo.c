@@ -293,3 +293,20 @@ usize cpuinfo_report(u8 *out, usize cap) {
     }
     return n;
 }
+
+u64 cpu_cache_bytes(int level) {
+    if (!C.valid) cpuinfo_run(0);
+    u64 found = 0;
+    int best = 0;
+    for (int i = 0; i < C.ncaches; i++) {
+        const cache_info *c = &C.caches[i];
+        if (c->type == TYPE_CODE) continue;
+        if (level ? (int)c->level == level : (int)c->level >= best) found = c->size, best = (int)c->level;
+    }
+    return found;
+}
+
+u32 cpu_line_bytes(void) {
+    if (!C.valid) cpuinfo_run(0);
+    return C.ncaches ? C.caches[0].line : 64;
+}

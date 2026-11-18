@@ -4,7 +4,7 @@
 
 #define FONT_ASCENT 21
 #define FONT_HEIGHT 27
-#define FONT_GLYPHS 178
+#define FONT_GLYPHS 180
 
 // code, advance, width, height, left, top (from the line top), offset into font_alpha
 static const struct { unsigned code; unsigned char advance, w, h; signed char left, top; unsigned offset; } font_glyphs[FONT_GLYPHS] = {
@@ -103,6 +103,7 @@ static const struct { unsigned code; unsigned char advance, w, h; signed char le
     {124, 5, 5, 15, 0, 6, 13872},
     {125, 8, 8, 17, 0, 5, 13947},
     {126, 12, 12, 7, 0, 14, 14083},
+    {160, 9, 9, 0, 0, 21, 14167},
     {171, 12, 12, 9, 0, 12, 14167},
     {176, 9, 9, 15, 0, 6, 14275},
     {177, 11, 11, 13, 0, 8, 14410},
@@ -181,6 +182,7 @@ static const struct { unsigned code; unsigned char advance, w, h; signed char le
     {8211, 13, 13, 8, 0, 13, 26553},
     {8212, 16, 16, 8, 0, 13, 26657},
     {8230, 14, 14, 1, 0, 20, 26785},
+    {8239, 5, 5, 0, 0, 21, 26799},
     {8470, 18, 18, 15, 0, 6, 26799},
     {8594, 9, 9, 0, 0, 21, 27069},
     {8776, 9, 9, 0, 0, 21, 27069},

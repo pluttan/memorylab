@@ -10,7 +10,7 @@ from PIL import Image, ImageDraw, ImageFont
 CHARS = (
     [chr(c) for c in range(0x20, 0x7f)]
     + [chr(c) for c in range(0x410, 0x450)]
-    + list('Ёё«»×–—№°±µ≈≤≥→²³·…')
+    + list('Ёё«»×–—№°±µ≈≤≥→²³·…\u202f\u00a0')
 )
 
 

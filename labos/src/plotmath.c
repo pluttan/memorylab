@@ -61,7 +61,8 @@ void format_count(char *out, unsigned size, u64 value) {
     char digits[24];
     usize n = fmt(digits, sizeof digits, "%lu", value), o = 0;
     for (usize i = 0; i < n && o + 2 < size; i++) {
-        if (i && (n - i) % 3 == 0) out[o++] = ' ';
+        // A thin no-break space (U+202F): wrapping never splits a number
+        if (i && (n - i) % 3 == 0 && o + 4 < size) out[o++] = (char)0xe2, out[o++] = (char)0x80, out[o++] = (char)0xaf;
         out[o++] = digits[i];
     }
     if (size) out[o < size ? o : size - 1] = 0;

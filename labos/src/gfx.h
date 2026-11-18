@@ -37,6 +37,13 @@ void gfx_fill(i32 x, i32 y, i32 w, i32 h, u32 rgb);
 void gfx_line(i32 x0, i32 y0, i32 x1, i32 y1, u32 rgb, int thickness);
 void gfx_dot(i32 x, i32 y, i32 radius, u32 rgb);
 
+// Antialiased drawing, limited to the clip rectangle (the whole screen after gfx_clip_reset)
+void gfx_clip(i32 x, i32 y, i32 w, i32 h);
+void gfx_clip_reset(void);
+void gfx_line_aa(double x0, double y0, double x1, double y1, u32 rgb, double width);
+void gfx_dot_aa(double cx, double cy, double radius, u32 rgb);
+void gfx_vline_dashed(i32 x, i32 y0, i32 y1, u32 rgb, i32 dash);
+
 // y is the top of the text line; returns the width in pixels
 i32 gfx_text(i32 x, i32 y, const char *utf8, u32 rgb);
 i32 gfx_text_width(const char *utf8);

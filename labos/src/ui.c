@@ -4,9 +4,11 @@
 #include "gfx.h"
 #include "lib.h"
 #include "manual.h"
+#include "measure.h"
 #include "net.h"
 #include "player.h"
 #include "plotmath.h"
+#include "results.h"
 #include "widgets.h"
 
 #define PAD 24
@@ -26,6 +28,7 @@ static struct {
     const char *message;
     u32 message_color;
     char status[192];
+    char notice[160];  // where the last result went on the stick
 } U;
 
 static void redraw(void);
@@ -88,7 +91,9 @@ static const char *hints(void) {
 static void right_text(char *out, usize size) {
     char ip[32];
     net_status(ip, sizeof ip);
-    if (U.mode == MODE_MANUAL) {
+    if (U.mode == MODE_RESULT && U.notice[0]) {
+        fmt(out, size, "%s", U.notice);
+    } else if (U.mode == MODE_MANUAL) {
         fmt(out, size, "методичка %d%%  ·  %s", manual_percent(), ip);
     } else {
         fmt(out, size, "labos  ·  %s", ip);
@@ -335,8 +340,34 @@ int ui_run(int index) {
     }
     U.message = 0;
     U.mode = MODE_RESULT;
+    U.notice[0] = 0;
     redraw();
+    // The screenshot on the stick shows the result exactly as it is on the screen
+    char saved[128];
+    if (results_save(e->id, e->report, saved, sizeof saved)) {
+        fmt(U.notice, sizeof U.notice, "сохранено: %s", saved + 6);
+    } else {
+        fmt(U.notice, sizeof U.notice, "на флешку не записалось");
+    }
+    draw_status();
+    gfx_present_rect(0, (i32)screen.height - status_height(), (i32)screen.width, status_height());
     return 1;
+}
+
+void progress(u64 done, u64 total) {
+    static u64 last;
+    u64 now = now_us();
+    if (now - last < 150000 && done < total) return;
+    last = now;
+    i32 h = status_height(), y = (i32)screen.height - h, w = (i32)screen.width;
+    char text[64];
+    int percent = total ? (int)(done * 100 / total) : 0;
+    fmt(text, sizeof text, "Идёт опыт: %d%%", percent);
+    gfx_fill(0, y, w, h, COL_GRID);
+    gfx_fill(0, y, (i32)((u64)w * (total ? done : 0) / (total ? total : 1)), 4, COL_MAUVE);
+    gfx_text(16, y + 6, text, COL_TEXT);
+    gfx_present_rect(0, y, w, h);
+    U.status[0] = 0;  // the next status redraw replaces the bar
 }
 
 // ==========================
