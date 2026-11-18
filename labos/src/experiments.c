@@ -1,8 +1,14 @@
-// The experiments of the lab in the order of the manual. run == 0: not in labos yet, the notebook has it.
+// The experiments of the lab in the order of the manual.
 // Default values are the ones for the lab computers (Pentium 4415U and i3-8100, the Skylake core).
 #include "exp.h"
+#include "exp_cacheperf.h"
+#include "exp_conflicts.h"
 #include "exp_cpuinfo.h"
+#include "exp_list.h"
+#include "exp_prefetch.h"
 #include "exp_rowconf.h"
+#include "exp_sort.h"
+#include "exp_streams.h"
 
 experiment experiments[] = {
     {
@@ -27,7 +33,7 @@ experiment experiments[] = {
         .about = "Две ячейки одного банка в разных строках читаются дольше: банк закрывает одну строку и "
                  "открывает другую. Программа читает опорную линейку в паре с каждой линейкой блока. Доля "
                  "медленных пар даёт число банков, второй проход даёт размер строки (страницы).",
-        .params = {{"Размер блока", "МБ", 2, 16, 2, 1}, {"Повторов на пару", "", 1, 63, 15, 0}},
+        .params = {{"Размер блока", "МБ", 2, 16, 2, 1}, {"Повторов на пару", "", 1, 63, 31, 0}},
         .nparams = 2,
         .run = rowconf_run,
         .draw = rowconf_draw,
@@ -46,6 +52,9 @@ experiment experiments[] = {
                    {"Наибольшая фрагментация", "КБ", 4, 500, 100, 0},
                    {"Шаг фрагментации", "КБ", 1, 10, 1, 0}},
         .nparams = 3,
+        .run = list_run,
+        .draw = list_draw,
+        .report = list_report,
     },
     {
         .id = "prefetch",
@@ -60,6 +69,9 @@ experiment experiments[] = {
                    {"Размер блока", "КБ", 4, 8192, 512, 1},
                    {"Страницы вразброс (1) или подряд (0)", "", 0, 1, 1, 0}},
         .nparams = 3,
+        .run = prefetch_run,
+        .draw = prefetch_draw,
+        .report = prefetch_report,
     },
     {
         .id = "memory_read_optimization",
@@ -71,6 +83,9 @@ experiment experiments[] = {
                  "В нём элементы всех потоков стоят рядом, и память отдаёт их одним пакетом.",
         .params = {{"Размер массива", "МБ", 1, 4, 4, 0}, {"Наибольшее число массивов", "", 1, 128, 32, 0}},
         .nparams = 2,
+        .run = streams_run,
+        .draw = streams_draw,
+        .report = streams_report,
     },
     {
         .id = "cache_conflicts",
@@ -85,6 +100,9 @@ experiment experiments[] = {
                    {"Размер линейки", "Б", 1, 128, 64, 1},
                    {"Наибольшее число линеек", "", 2, 512, 512, 1}},
         .nparams = 3,
+        .run = conflicts_run,
+        .draw = conflicts_draw,
+        .report = conflicts_report,
     },
     {
         .id = "cache_performance",
@@ -96,6 +114,9 @@ experiment experiments[] = {
                  "килобайт не меняется. Каждая ступень графика соответствует объёму очередного уровня кэша.",
         .params = {{"Наибольший блок", "КБ", 1, 1048576, 131072, 1}, {"Шаг роста блока", "Б", 1, 4096, 1024, 1}},
         .nparams = 2,
+        .run = cacheperf_run,
+        .draw = cacheperf_draw,
+        .report = cacheperf_report,
     },
     {
         .id = "sorting_algorithms",
@@ -107,6 +128,9 @@ experiment experiments[] = {
                  "сравнений. Программа сортирует массивы растущей длины и сравнивает время.",
         .params = {{"Наибольшее число элементов", "М", 1, 20, 10, 0}, {"Шаг длины массива", "К", 4, 1024, 512, 1}},
         .nparams = 2,
+        .run = sort_run,
+        .draw = sort_draw,
+        .report = sort_report,
     },
 };
 

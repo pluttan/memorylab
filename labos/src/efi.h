@@ -7,6 +7,7 @@ typedef unsigned char u8;
 typedef unsigned short u16;
 typedef unsigned int u32;
 typedef unsigned long long u64;
+typedef signed short i16;
 typedef signed int i32;
 typedef signed long long i64;
 typedef u64 usize;
@@ -155,9 +156,17 @@ typedef struct {
     void *create_event_ex;
 } efi_boot_services;
 
+typedef struct efi_time {
+    u16 year;
+    u8 month, day, hour, minute, second, pad1;
+    u32 nanosecond;
+    i16 time_zone;
+    u8 daylight, pad2;
+} efi_time;
+
 typedef struct {
     efi_table_header hdr;
-    void *get_time;
+    efi_status (*get_time)(efi_time *time, void *capabilities);
     void *set_time;
     void *get_wakeup_time;
     void *set_wakeup_time;
@@ -309,19 +318,22 @@ typedef struct {
 } efi_loaded_image;
 
 #define EFI_FILE_MODE_READ 1ULL
+#define EFI_FILE_MODE_WRITE 2ULL
+#define EFI_FILE_MODE_CREATE 0x8000000000000000ULL
+#define EFI_FILE_DIRECTORY 0x10ULL
 
 typedef struct efi_file {
     u64 revision;
     efi_status (*open)(struct efi_file *self, struct efi_file **out, const char16 *name, u64 mode, u64 attributes);
     efi_status (*close)(struct efi_file *self);
-    void *delete_file;
+    efi_status (*delete_file)(struct efi_file *self);  // also closes the handle
     efi_status (*read)(struct efi_file *self, usize *size, void *buffer);
-    void *write;
+    efi_status (*write)(struct efi_file *self, usize *size, const void *buffer);
     efi_status (*get_position)(struct efi_file *self, u64 *position);
     efi_status (*set_position)(struct efi_file *self, u64 position);
     void *get_info;
     void *set_info;
-    void *flush;
+    efi_status (*flush)(struct efi_file *self);
 } efi_file;
 
 typedef struct efi_simple_fs {

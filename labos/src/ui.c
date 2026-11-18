@@ -4,9 +4,11 @@
 #include "gfx.h"
 #include "lib.h"
 #include "manual.h"
+#include "measure.h"
 #include "net.h"
 #include "player.h"
 #include "plotmath.h"
+#include "results.h"
 #include "widgets.h"
 
 #define PAD 24
@@ -25,7 +27,8 @@ static struct {
     param_edit edit;
     const char *message;
     u32 message_color;
-    char status[192];
+    char status[320];
+    char notice[160];  // where the last result went on the stick
 } U;
 
 static void redraw(void);
@@ -88,7 +91,9 @@ static const char *hints(void) {
 static void right_text(char *out, usize size) {
     char ip[32];
     net_status(ip, sizeof ip);
-    if (U.mode == MODE_MANUAL) {
+    if (U.mode == MODE_RESULT && U.notice[0]) {
+        fmt(out, size, "%s", U.notice);
+    } else if (U.mode == MODE_MANUAL) {
         fmt(out, size, "методичка %d%%  ·  %s", manual_percent(), ip);
     } else {
         fmt(out, size, "labos  ·  %s", ip);
@@ -97,8 +102,12 @@ static void right_text(char *out, usize size) {
 
 static void draw_status(void) {
     i32 h = status_height(), y = screen.height - h;
-    char right[64];
+    char right[192];
     right_text(right, sizeof right);
+    // A long notice gives way to the key hints on a narrow screen
+    if (gfx_text_width(hints()) + gfx_text_width(right) + 64 > (i32)screen.width) {
+        fmt(right, sizeof right, U.mode == MODE_RESULT && U.notice[0] ? "на флешке" : "");
+    }
     gfx_fill(0, y, screen.width, h, COL_GRID);
     gfx_text(16, y + 6, hints(), COL_TEXT);
     gfx_text(screen.width - 16 - gfx_text_width(right), y + 6, right, COL_SUBTEXT);
@@ -110,7 +119,7 @@ void ui_tick(void) {
         player_tick();
         return;
     }
-    char right[64], now[192];
+    char right[192], now[320];
     right_text(right, sizeof right);
     fmt(now, sizeof now, "%s|%s", hints(), right);
     if (!strncmp(now, U.status, sizeof now)) return;
@@ -335,8 +344,44 @@ int ui_run(int index) {
     }
     U.message = 0;
     U.mode = MODE_RESULT;
+    U.notice[0] = 0;
     redraw();
+    // The screenshot on the stick shows the result exactly as it is on the screen
+    char saved[128];
+    if (results_save(e->id, e->report, saved, sizeof saved)) {
+        // Only the name: the folder is always labos/results
+        const char *name = saved;
+        for (const char *c = saved; *c; c++) {
+            if (*c == '/') name = c + 1;
+        }
+        usize len = strlen(name);
+        if (len > 4 && !strncmp(name + len - 4, ".txt", 4)) len -= 4;
+        static const char prefix[] = "на флешке: ";
+        usize start = sizeof prefix - 1;
+        fmt(U.notice, sizeof U.notice, "%s%s", prefix, name);
+        if (start + len < sizeof U.notice) U.notice[start + len] = 0;
+    } else {
+        fmt(U.notice, sizeof U.notice, "на флешку не записалось");
+    }
+    draw_status();
+    gfx_present_rect(0, (i32)screen.height - status_height(), (i32)screen.width, status_height());
     return 1;
+}
+
+void progress(u64 done, u64 total) {
+    static u64 last;
+    u64 now = now_us();
+    if (now - last < 150000 && done < total) return;
+    last = now;
+    i32 h = status_height(), y = (i32)screen.height - h, w = (i32)screen.width;
+    char text[64];
+    int percent = total ? (int)(done * 100 / total) : 0;
+    fmt(text, sizeof text, "Идёт опыт: %d%%", percent);
+    gfx_fill(0, y, w, h, COL_GRID);
+    gfx_fill(0, y, (i32)((u64)w * (total ? done : 0) / (total ? total : 1)), 4, COL_MAUVE);
+    gfx_text(16, y + 6, text, COL_TEXT);
+    gfx_present_rect(0, y, w, h);
+    U.status[0] = 0;  // the next status redraw replaces the bar
 }
 
 // ==========================

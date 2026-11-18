@@ -63,6 +63,13 @@ void gfx_present(void) { gfx_present_rect(0, 0, (i32)screen.width, (i32)screen.h
 // ===  Shapes            ===
 // ==========================
 
+static u32 blend(u32 bg, u32 fg, u32 a) {
+    u32 r = (((fg >> 16) & 0xff) * a + ((bg >> 16) & 0xff) * (255 - a)) / 255;
+    u32 g = (((fg >> 8) & 0xff) * a + ((bg >> 8) & 0xff) * (255 - a)) / 255;
+    u32 b = ((fg & 0xff) * a + (bg & 0xff) * (255 - a)) / 255;
+    return (r << 16) | (g << 8) | b;
+}
+
 static inline void plot_pixel(i32 x, i32 y, u32 rgb) {
     if (!gfx_dry && x >= 0 && y >= 0 && (u32)x < screen.width && (u32)y < screen.height) {
         screen.pixels[(usize)y * screen.width + x] = rgb;
@@ -109,6 +116,76 @@ void gfx_line(i32 x0, i32 y0, i32 x1, i32 y1, u32 rgb, int thickness) {
     }
 }
 
+
+// ==========================
+// ===  Antialiased       ===
+// ==========================
+
+static struct {
+    i32 x0, y0, x1, y1;
+} clip = {0, 0, 1 << 30, 1 << 30};
+
+void gfx_clip(i32 x, i32 y, i32 w, i32 h) {
+    clip.x0 = x, clip.y0 = y, clip.x1 = x + w, clip.y1 = y + h;
+}
+
+void gfx_clip_reset(void) { gfx_clip(0, 0, 1 << 30, 1 << 30); }
+
+static inline void blend_pixel(i32 x, i32 y, u32 rgb, double coverage) {
+    if (gfx_dry || coverage <= 0 || x < clip.x0 || y < clip.y0 || x >= clip.x1 || y >= clip.y1) return;
+    if (x < 0 || y < 0 || (u32)x >= screen.width || (u32)y >= screen.height) return;
+    u32 *p = screen.pixels + (usize)y * screen.width + x;
+    u32 a = coverage >= 1 ? 255 : (u32)(coverage * 255 + 0.5);
+    *p = a == 255 ? rgb : blend(*p, rgb, a);
+}
+
+static inline double clamp01(double v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
+
+// Coverage from the distance to the segment: full inside width/2, fading over one pixel at the edge
+void gfx_line_aa(double x0, double y0, double x1, double y1, u32 rgb, double width) {
+    double r = width / 2 + 1;
+    i32 bx0 = (i32)((x0 < x1 ? x0 : x1) - r), bx1 = (i32)((x0 > x1 ? x0 : x1) + r) + 1;
+    i32 by0 = (i32)((y0 < y1 ? y0 : y1) - r), by1 = (i32)((y0 > y1 ? y0 : y1) + r) + 1;
+    if (bx0 < clip.x0) bx0 = clip.x0;
+    if (by0 < clip.y0) by0 = clip.y0;
+    if (bx1 > clip.x1) bx1 = clip.x1;
+    if (by1 > clip.y1) by1 = clip.y1;
+    double dx = x1 - x0, dy = y1 - y0, len2 = dx * dx + dy * dy;
+    for (i32 y = by0; y < by1; y++) {
+        for (i32 x = bx0; x < bx1; x++) {
+            double px = x + 0.5 - x0, py = y + 0.5 - y0;
+            double t = len2 > 0 ? clamp01((px * dx + py * dy) / len2) : 0;
+            double ex = px - t * dx, ey = py - t * dy;
+            double d2 = ex * ex + ey * ey;
+            if (d2 > r * r) continue;
+            // sqrt by Newton steps: libm is not available
+            double d = d2 > 0 ? d2 : 0, s = d > 1 ? d / 2 : 1;
+            for (int k = 0; k < 6 && d > 0; k++) s = (s + d / s) / 2;
+            blend_pixel(x, y, rgb, clamp01(width / 2 + 0.5 - (d > 0 ? s : 0)));
+        }
+    }
+}
+
+void gfx_dot_aa(double cx, double cy, double radius, u32 rgb) {
+    i32 x0 = (i32)(cx - radius - 1), x1 = (i32)(cx + radius + 2), y0 = (i32)(cy - radius - 1), y1 = (i32)(cy + radius + 2);
+    for (i32 y = y0; y < y1; y++) {
+        for (i32 x = x0; x < x1; x++) {
+            double ex = x + 0.5 - cx, ey = y + 0.5 - cy, d2 = ex * ex + ey * ey;
+            if (d2 > (radius + 1) * (radius + 1)) continue;
+            double s = d2 > 1 ? d2 / 2 : 1;
+            for (int k = 0; k < 6 && d2 > 0; k++) s = (s + d2 / s) / 2;
+            blend_pixel(x, y, rgb, clamp01(radius + 0.5 - (d2 > 0 ? s : 0)));
+        }
+    }
+}
+
+// Dashes of `dash` pixels with gaps of the same length, for marks on a graph
+void gfx_vline_dashed(i32 x, i32 y0, i32 y1, u32 rgb, i32 dash) {
+    for (i32 y = y0; y < y1; y += 2 * dash) {
+        for (i32 k = y; k < y + dash && k < y1; k++) blend_pixel(x, k, rgb, 1);
+    }
+}
+
 // ==========================
 // ===  Text              ===
 // ==========================
@@ -125,12 +202,6 @@ static int find_glyph(u32 code) {
     return code == '?' ? -1 : find_glyph('?');
 }
 
-static u32 blend(u32 bg, u32 fg, u32 a) {
-    u32 r = (((fg >> 16) & 0xff) * a + ((bg >> 16) & 0xff) * (255 - a)) / 255;
-    u32 g = (((fg >> 8) & 0xff) * a + ((bg >> 8) & 0xff) * (255 - a)) / 255;
-    u32 b = ((fg & 0xff) * a + (bg & 0xff) * (255 - a)) / 255;
-    return (r << 16) | (g << 8) | b;
-}
 
 i32 gfx_text_n(i32 x, i32 y, const char *utf8, usize length, u32 rgb) {
     i32 start = x;
