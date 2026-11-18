@@ -27,7 +27,7 @@ static struct {
     param_edit edit;
     const char *message;
     u32 message_color;
-    char status[192];
+    char status[320];
     char notice[160];  // where the last result went on the stick
 } U;
 
@@ -102,8 +102,12 @@ static void right_text(char *out, usize size) {
 
 static void draw_status(void) {
     i32 h = status_height(), y = screen.height - h;
-    char right[64];
+    char right[192];
     right_text(right, sizeof right);
+    // A long notice gives way to the key hints on a narrow screen
+    if (gfx_text_width(hints()) + gfx_text_width(right) + 64 > (i32)screen.width) {
+        fmt(right, sizeof right, U.mode == MODE_RESULT && U.notice[0] ? "на флешке" : "");
+    }
     gfx_fill(0, y, screen.width, h, COL_GRID);
     gfx_text(16, y + 6, hints(), COL_TEXT);
     gfx_text(screen.width - 16 - gfx_text_width(right), y + 6, right, COL_SUBTEXT);
@@ -115,7 +119,7 @@ void ui_tick(void) {
         player_tick();
         return;
     }
-    char right[64], now[192];
+    char right[192], now[320];
     right_text(right, sizeof right);
     fmt(now, sizeof now, "%s|%s", hints(), right);
     if (!strncmp(now, U.status, sizeof now)) return;
@@ -345,7 +349,17 @@ int ui_run(int index) {
     // The screenshot on the stick shows the result exactly as it is on the screen
     char saved[128];
     if (results_save(e->id, e->report, saved, sizeof saved)) {
-        fmt(U.notice, sizeof U.notice, "сохранено: %s", saved + 6);
+        // Only the name: the folder is always labos/results
+        const char *name = saved;
+        for (const char *c = saved; *c; c++) {
+            if (*c == '/') name = c + 1;
+        }
+        usize len = strlen(name);
+        if (len > 4 && !strncmp(name + len - 4, ".txt", 4)) len -= 4;
+        static const char prefix[] = "на флешке: ";
+        usize start = sizeof prefix - 1;
+        fmt(U.notice, sizeof U.notice, "%s%s", prefix, name);
+        if (start + len < sizeof U.notice) U.notice[start + len] = 0;
     } else {
         fmt(U.notice, sizeof U.notice, "на флешку не записалось");
     }
