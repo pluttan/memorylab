@@ -2,6 +2,7 @@
 
 #include "analysis.h"
 #include "gfx.h"
+#include "hwprefetch.h"
 #include "lib.h"
 #include "measure.h"
 #include "plot.h"
@@ -117,8 +118,6 @@ static u64 classic_ticks(const u8 *block, const u32 *order, u32 lines, u64 dist)
     return t + (rdtsc() * 2654435761u >> 40) % (t / 40 + 1);
 }
 
-static int prefetch_disable(void) { return 0; }
-static void prefetch_restore(void) {}
 #else
 // Every line of the block once, in the order of the PCLAB loop: the ones `dist` apart one after
 // another. The caches are empty, so every read goes to DRAM
@@ -139,44 +138,6 @@ static u64 classic_ticks(const u8 *block, const u32 *order, u32 lines, u64 dist)
     return t;
 }
 
-// The four hardware prefetchers of Intel Core processors (L2 stream, L2 adjacent line, L1 stream,
-// L1 by instruction) are switched off by the low four bits of MSR 0x1A4. Only the client models from
-// Sandy Bridge to Comet Lake on bare hardware: elsewhere the register may be absent or laid out otherwise
-#define MSR_PREFETCH 0x1a4u
-static u64 prefetch_saved;
-static int prefetch_changed;
-
-static int prefetch_known_cpu(void) {
-    static const u8 MODELS[] = {0x2a, 0x2d, 0x3a, 0x3e, 0x3c, 0x3f, 0x45, 0x46, 0x3d, 0x47, 0x4f, 0x56,
-                                0x4e, 0x5e, 0x55, 0x8e, 0x9e, 0xa5, 0xa6};
-    u32 a, b, c, d;
-    __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(0), "c"(0));
-    if (b != 0x756e6547u || d != 0x49656e69u || c != 0x6c65746eu) return 0;  // GenuineIntel
-    __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(1), "c"(0));
-    if (((a >> 8) & 0xf) != 6 || (c >> 31)) return 0;  // family 6, no hypervisor
-    u32 model = ((a >> 4) & 0xf) | ((a >> 12) & 0xf0);
-    for (usize i = 0; i < sizeof MODELS; i++) {
-        if (MODELS[i] == model) return 1;
-    }
-    return 0;
-}
-
-static int prefetch_disable(void) {
-    if (!prefetch_known_cpu()) return 0;
-    u32 lo, hi;
-    __asm__ volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(MSR_PREFETCH));
-    prefetch_saved = (u64)hi << 32 | lo;
-    u64 off = prefetch_saved | 0xf;
-    __asm__ volatile("wrmsr" ::"c"(MSR_PREFETCH), "a"((u32)off), "d"((u32)(off >> 32)));
-    prefetch_changed = 1;
-    return 1;
-}
-
-static void prefetch_restore(void) {
-    if (!prefetch_changed) return;
-    __asm__ volatile("wrmsr" ::"c"(MSR_PREFETCH), "a"((u32)prefetch_saved), "d"((u32)(prefetch_saved >> 32)));
-    prefetch_changed = 0;
-}
 #endif
 
 static double pair_ns(const u8 *block, u32 ref, u32 i, int rounds) {
@@ -269,7 +230,7 @@ static void classic_graph(const u8 *block, const u32 *order) {
     for (u64 d = R.dist_step; d <= R.max_dist && R.classic_n < CLASSIC_POINTS; d += R.dist_step) {
         classic_dist[R.classic_n++] = d;
     }
-    R.prefetch_off = prefetch_disable();
+    R.prefetch_off = hw_prefetch_off();
     for (usize i = 0; i < R.classic_n; i++) {
         if ((i & 63) == 0) progress(i, R.classic_n);
         u64 best = ~0ull;
@@ -280,7 +241,7 @@ static void classic_graph(const u8 *block, const u32 *order) {
         }
         classic_us[i] = ticks_ns(best) / 1000;
     }
-    prefetch_restore();
+    hw_prefetch_restore();
     R.peaks = find_textbook_peaks(classic_dist, classic_us, R.classic_n, ROWCONF_LINE);
     R.t1_banks = R.peaks.t1 < R.classic_n ? (u32)(classic_dist[R.peaks.t1] / ROWCONF_LINE) : 0;
     R.t2_page = R.peaks.t2 < R.classic_n && R.t1_banks ? classic_dist[R.peaks.t2] / R.t1_banks : 0;

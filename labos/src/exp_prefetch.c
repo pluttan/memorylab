@@ -1,11 +1,14 @@
 // Experiment 3: the first access to a page is slow: the processor walks the page tables and opens a DRAM
 // row. A prefetch pass touches every page first; then the reads find the page in the TLB and its first
 // line in the cache. labos maps the block with 4 KB pages (pages4k.c), empties the caches with wbinvd and
-// the TLB with a CR3 reload before every pass, and keeps interrupts off during the passes.
+// the TLB with a CR3 reload before every pass, and keeps interrupts off during the passes. The hardware
+// prefetchers are off, as the manual assumes: otherwise a modern processor loads the next page itself
+// during a sequential read, and the peaks at the page starts vanish.
 #include "exp_prefetch.h"
 
 #include "expscreen.h"
 #include "gfx.h"
+#include "hwprefetch.h"
 #include "measure.h"
 #include "pages4k.h"
 #include "plotmath.h"
@@ -23,7 +26,7 @@ static struct {
     double plot_x[PLOT_MAX], plot_no[PLOT_MAX], plot_pf[PLOT_MAX];
     usize plotted;
     double first_no_ns, first_pf_ns, other_ns, ratio, ratio_with_loop, overhead_ns;
-    int shuffled, small_pages, valid;
+    int shuffled, small_pages, hw_off, valid;
     u64 step, block;
 } P;
 
@@ -122,6 +125,7 @@ int prefetch_run(const exp_param *params) {
     build_walk(P.shuffled);
     P.small_pages = pages4k_begin((u64)base, span);
     u64 overhead = timer_overhead();
+    P.hw_off = hw_prefetch_off();
 
     usize q = quiet_begin();
     flush_caches(), flush_tlb();
@@ -145,6 +149,7 @@ int prefetch_run(const exp_param *params) {
         if (no < best_no) best_no = no;
         if (pf < best_pf) best_pf = pf, best_loop = loop;
     }
+    hw_prefetch_restore();
     pages4k_end();
     BS->free_pages((efi_phys_addr)raw, block_pages);
     summarize(overhead);
@@ -152,22 +157,24 @@ int prefetch_run(const exp_param *params) {
     P.ratio = best_pf ? (double)best_no / (double)best_pf : 0;
     P.ratio_with_loop = best_pf ? (double)best_no / (double)(best_pf + best_loop) : 0;
     P.valid = 1;
-    log_line("prefetch: %lu accesses, %lu pages, 4 KB pages %s, first %.1f / %.1f ns, ratio %.2f", P.accesses,
-             P.pages, P.small_pages ? "yes" : "no", P.first_no_ns, P.first_pf_ns, P.ratio);
+    log_line("prefetch: %lu accesses, %lu pages, 4 KB pages %s, hardware prefetch off %d, first %.1f / %.1f ns, "
+             "ratio %.2f", P.accesses, P.pages, P.small_pages ? "yes" : "no", P.hw_off, P.first_no_ns, P.first_pf_ns,
+             P.ratio);
     return 1;
 }
 
 void prefetch_draw(i32 height) {
     gfx_fill(0, 0, screen.width, height, COL_OUTER);
     if (!P.valid) return;
-    static char c0[200], c1[220], c2[220];
+    static char c0[200], c1[220], c2[320];
     fmt(c0, sizeof c0, "Обработка без предвыборки шла в %.2f раза дольше (с учётом цикла предвыборки в %.2f раза).",
         P.ratio, P.ratio_with_loop);
     fmt(c1, sizeof c1, "Первое обращение к странице: %.0f нс без предвыборки, %.0f нс с ней. Остальные обращения: %.1f нс.",
         P.first_no_ns, P.first_pf_ns, P.other_ns);
-    fmt(c2, sizeof c2, "Страниц %lu по 4 КБ%s, обход страниц %s, обращений %lu.%s", P.pages,
-        P.small_pages ? "" : " (не удалось: блок в больших страницах UEFI)", P.shuffled ? "вразброс" : "подряд",
-        P.accesses, P.accesses > PLOT_MAX ? " На графике первые 4096 обращений." : "");
+    fmt(c2, sizeof c2, "Страниц %lu по 4 КБ%s, обход страниц %s, обращений %lu.%s Аппаратная предвыборка %s.",
+        P.pages, P.small_pages ? "" : " (не удалось: блок в больших страницах UEFI)", P.shuffled ? "вразброс" : "подряд",
+        P.accesses, P.accesses > PLOT_MAX ? " На графике первые 4096 обращений." : "",
+        P.hw_off ? "выключена" : "включена: процессор не из известного списка");
     series lines[] = {{"Без предвыборки", COL_RED, P.plot_x, P.plot_no, P.plotted},
                       {"С предвыборкой", COL_GREEN, P.plot_x, P.plot_pf, P.plotted}};
     double lo, hi;
@@ -175,7 +182,7 @@ void prefetch_draw(i32 height) {
     double top = P.first_no_ns * 1.6 > hi ? hi * 1.08 : P.first_no_ns * 1.6;  // rare interrupts stay off the scale
     expscreen s = {.graph = {.x0 = 0, .x1 = P.plot_x[P.plotted - 1] + 1, .y0 = 0, .y1 = top > 1 ? top : 1,
                              .x_kind = AXIS_BYTES, .title = "Исследование эффективности программной предвыборки",
-                             .x_label = P.shuffled ? "Смещение в порядке обхода (страницы вразброс)" : "Смещение",
+                             .x_label = P.shuffled ? "Смещение в порядке обхода (страницы вразброс)" : "Смещение от начала блока",
                              .y_label = "нс"},
                    .lines = lines, .nlines = 2, .conclusions = {c0, c1, c2}};
     expscreen_draw(&s, height);
@@ -185,10 +192,10 @@ usize prefetch_report(u8 *out, usize cap) {
     char *s = (char *)out;
     if (!P.valid) return fmt(s, cap, "error: experiment 3 has not run yet");
     usize n = fmt(s, cap,
-                  "experiment prefetch\nstep_bytes %lu\nblock_bytes %lu\npages %lu\nshuffled %d\nsmall_pages %d\n"
+                  "experiment prefetch\nstep_bytes %lu\nblock_bytes %lu\npages %lu\nshuffled %d\nsmall_pages %d\nhw_prefetch_off %d\n"
                   "accesses %lu\nratio %.3f\nratio_with_loop %.3f\nfirst_no_prefetch_ns %.2f\nfirst_prefetch_ns %.2f\n"
                   "other_ns %.2f\ntimer_overhead_ns %.2f\ntsc_ghz %.4f\ndata offset no_prefetch_ns prefetch_ns\n",
-                  P.step, P.block, P.pages, P.shuffled, P.small_pages, P.accesses, P.ratio, P.ratio_with_loop,
+                  P.step, P.block, P.pages, P.shuffled, P.small_pages, P.hw_off, P.accesses, P.ratio, P.ratio_with_loop,
                   P.first_no_ns, P.first_pf_ns, P.other_ns, P.overhead_ns, tsc_per_ns);
     for (usize i = 0; i < P.plotted && n + 64 < cap; i++) {
         n += fmt(s + n, cap - n, "%u %.1f %.1f\n", P.offsets[i], P.plot_no[i], P.plot_pf[i]);
