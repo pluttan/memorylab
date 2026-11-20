@@ -55,7 +55,7 @@ QEMU_ARGS := -machine q35 -cpu $(CPU) -m 1G -smp 1 \
 
 # Pure modules tested on this machine: the test name, then the sources it needs
 TESTS := plotmath:src/plotmath.c,src/fmt.c netpkt:src/netpkt.c analysis:src/analysis.c params:src/params.c \
-	leaf2:src/cpuid_leaf2.c film:src/film.c manualfmt:src/manualfmt.c bmp:src/bmp.c cachesteps:src/cachesteps.c
+	leaf2:src/cpuid_leaf2.c film:src/film.c manualfmt:src/manualfmt.c bmp:src/bmp.c cachesteps:src/cachesteps.c textbook:src/textbook.c
 
 .PHONY: all build font test qemu qemu-headless screenshot stop clean help ping remote-log remote-screen usb \
 	manual films content filmbench

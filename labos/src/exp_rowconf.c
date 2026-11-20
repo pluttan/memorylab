@@ -3,17 +3,20 @@
 #include "analysis.h"
 #include "gfx.h"
 #include "lib.h"
+#include "measure.h"
 #include "plot.h"
 #include "plotmath.h"
+#include "textbook.h"
 #include "widgets.h"
 
 #define TPL_HIGH_LEVEL 31    // blocks every interrupt, so nothing lands inside a measurement
 #define LINES_PER_SLICE 512  // the firmware timers get a turn between slices
 #define MAX_ROUNDS 63
 #define RETRIES 2            // extra measurements of the lines above the low band
-#define ALIGN (2ull << 20)
 #define MB (1ull << 20)
 #define HIST_BINS 120
+#define CLASSIC_POINTS 16384  // distances of the classic graph
+#define CLASSIC_REPEATS 3     // the smallest time of these is kept
 
 typedef struct {
     double *ns;  // final pair time with the reference of the pass, ns
@@ -32,8 +35,21 @@ static struct {
     u64 pages;  // DRAM pages (rows of a rank) in the whole memory
     u64 duration_us;
     int rounds;
+    // The classic pass of PCLAB over the block, in the textbook order when the banks were found
+    int textbook;
+    u32 kernel_banks;  // banks of the kernel of the bank function, 0 when it was not found
+    int prefetch_off;  // the hardware prefetchers were off during the classic pass
+    u64 max_dist, dist_step;
+    usize classic_n;
+    textbook_peaks peaks;
+    u32 t1_banks;   // T1 / line
+    u64 t2_page;    // T2 / banks
+    u64 t2_pages;   // memory / page
     int valid;
 } R;
+
+static u64 classic_dist[CLASSIC_POINTS];
+static double classic_us[CLASSIC_POINTS];
 
 static usize result_pages;
 
@@ -79,6 +95,87 @@ static u32 pair_ticks(const volatile u64 *a, const volatile u64 *b, int rounds) 
         t[j] = v;
     }
     return t[rounds / 2];
+}
+#endif
+
+#ifdef ROWCONF_SYNTHETIC
+// The classic pass on the model: reads in one bank wait for each other, a row change costs more
+static u64 classic_ticks(const u8 *block, const u32 *order, u32 lines, u64 dist) {
+    static u32 open_row[16];
+    for (int k = 0; k < 16; k++) open_row[k] = ~0u;
+    u32 last = ~0u;
+    u64 t = 0, total = (u64)lines * ROWCONF_LINE;
+    for (u64 b = 0; b < dist; b += ROWCONF_LINE) {
+        for (u64 a = b; a < total; a += dist) {
+            u64 x = (u64)block + (u64)order[a / ROWCONF_LINE] * ROWCONF_LINE;
+            u32 k = model_bank(x), row = (u32)(x >> 17);
+            int hit = open_row[k] == row;
+            t += k == last ? (hit ? 30 : 140) : (hit ? 10 : 50);
+            open_row[k] = row, last = k;
+        }
+    }
+    return t + (rdtsc() * 2654435761u >> 40) % (t / 40 + 1);
+}
+
+static int prefetch_disable(void) { return 0; }
+static void prefetch_restore(void) {}
+#else
+// Every line of the block once, in the order of the PCLAB loop: the ones `dist` apart one after
+// another. The caches are empty, so every read goes to DRAM
+static u64 classic_ticks(const u8 *block, const u32 *order, u32 lines, u64 dist) {
+    u64 sum = 0;
+    for (u32 i = 0; i < lines; i += 16) sum += order[i];  // the order comes into the cache, the block does not
+    u64 total = (u64)lines * ROWCONF_LINE;
+    usize q = quiet_begin();
+    u64 t0 = tsc_begin();
+    for (u64 b = 0; b < dist; b += ROWCONF_LINE) {
+        for (u64 a = b; a < total; a += dist) {
+            sum += *(const volatile u64 *)(block + (u64)order[a / ROWCONF_LINE] * ROWCONF_LINE);
+        }
+    }
+    u64 t = tsc_end() - t0;
+    quiet_end(q);
+    keep(sum);
+    return t;
+}
+
+// The four hardware prefetchers of Intel Core processors (L2 stream, L2 adjacent line, L1 stream,
+// L1 by instruction) are switched off by the low four bits of MSR 0x1A4. Only the client models from
+// Sandy Bridge to Comet Lake on bare hardware: elsewhere the register may be absent or laid out otherwise
+#define MSR_PREFETCH 0x1a4u
+static u64 prefetch_saved;
+static int prefetch_changed;
+
+static int prefetch_known_cpu(void) {
+    static const u8 MODELS[] = {0x2a, 0x2d, 0x3a, 0x3e, 0x3c, 0x3f, 0x45, 0x46, 0x3d, 0x47, 0x4f, 0x56,
+                                0x4e, 0x5e, 0x55, 0x8e, 0x9e, 0xa5, 0xa6};
+    u32 a, b, c, d;
+    __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(0), "c"(0));
+    if (b != 0x756e6547u || d != 0x49656e69u || c != 0x6c65746eu) return 0;  // GenuineIntel
+    __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(1), "c"(0));
+    if (((a >> 8) & 0xf) != 6 || (c >> 31)) return 0;  // family 6, no hypervisor
+    u32 model = ((a >> 4) & 0xf) | ((a >> 12) & 0xf0);
+    for (usize i = 0; i < sizeof MODELS; i++) {
+        if (MODELS[i] == model) return 1;
+    }
+    return 0;
+}
+
+static int prefetch_disable(void) {
+    if (!prefetch_known_cpu()) return 0;
+    u32 lo, hi;
+    __asm__ volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(MSR_PREFETCH));
+    prefetch_saved = (u64)hi << 32 | lo;
+    u64 off = prefetch_saved | 0xf;
+    __asm__ volatile("wrmsr" ::"c"(MSR_PREFETCH), "a"((u32)off), "d"((u32)(off >> 32)));
+    prefetch_changed = 1;
+    return 1;
+}
+
+static void prefetch_restore(void) {
+    if (!prefetch_changed) return;
+    __asm__ volatile("wrmsr" ::"c"(MSR_PREFETCH), "a"((u32)prefetch_saved), "d"((u32)(prefetch_saved >> 32)));
+    prefetch_changed = 0;
 }
 #endif
 
@@ -141,17 +238,78 @@ static u32 pick_ref2(void) {
     return best;
 }
 
+typedef enum { OK, NO_TIMES, NO_PEAK, NO_SECOND_PEAK, ODD_NUMBERS } verdict;
+
+static verdict judge(void) {
+    if (R.a.modes.low < 1) return NO_TIMES;
+    if (R.a.modes.high <= 0 || !R.ref2) return NO_PEAK;
+    if (R.b.modes.high <= 0) return NO_SECOND_PEAK;
+    if (R.estimate.banks < 2 || R.estimate.banks > 512 || R.estimate.row_bytes < 1024) return ODD_NUMBERS;
+    return OK;
+}
+
+// The textbook order from the bank of line 0: the kernel of the bank function, the bank of every line,
+// then the banks taking turns line by line. Returns 0 when the kernel does not give a sane bank count
+static int build_order(u32 *order, u32 *bank_of, u32 *scratch) {
+    u8 *in_bank = (u8 *)scratch;  // free until bank_numbers fills scratch
+    const u8 *fa = R.flags, *fb = R.flags + R.lines;
+    for (u32 i = 0; i < R.lines; i++) in_bank[i] = fa[i] || fb[i];
+    in_bank[0] = 1;
+    static u32 basis[TEXTBOOK_MAX_RANK];
+    usize rank = bank_kernel(in_bank, R.lines, 0, basis);
+    u32 banks = bank_numbers(basis, rank, R.lines, bank_of, scratch);
+    if (banks < 2 || banks > 512) return 0;
+    R.kernel_banks = banks;
+    textbook_order(bank_of, R.lines, banks, order, scratch);
+    return 1;
+}
+
+static void classic_graph(const u8 *block, const u32 *order) {
+    R.classic_n = 0;
+    for (u64 d = R.dist_step; d <= R.max_dist && R.classic_n < CLASSIC_POINTS; d += R.dist_step) {
+        classic_dist[R.classic_n++] = d;
+    }
+    R.prefetch_off = prefetch_disable();
+    for (usize i = 0; i < R.classic_n; i++) {
+        if ((i & 63) == 0) progress(i, R.classic_n);
+        u64 best = ~0ull;
+        for (int r = 0; r < CLASSIC_REPEATS; r++) {
+            flush_caches();
+            u64 t = classic_ticks(block, order, R.lines, classic_dist[i]);
+            if (t < best) best = t;
+        }
+        classic_us[i] = ticks_ns(best) / 1000;
+    }
+    prefetch_restore();
+    R.peaks = find_textbook_peaks(classic_dist, classic_us, R.classic_n, ROWCONF_LINE);
+    R.t1_banks = R.peaks.t1 < R.classic_n ? (u32)(classic_dist[R.peaks.t1] / ROWCONF_LINE) : 0;
+    R.t2_page = R.peaks.t2 < R.classic_n && R.t1_banks ? classic_dist[R.peaks.t2] / R.t1_banks : 0;
+    R.t2_pages = R.t2_page ? R.memory_bytes / R.t2_page : 0;
+}
+
 int rowconf_run(const exp_param *params) {
-    u64 block_bytes = (u64)params[0].value * MB;
+    // A power of two of megabytes on a boundary of its size: the line number is then the address bits
+    u64 mb = (u64)params[0].value;
+    while (mb & (mb - 1)) mb &= mb - 1;
+    u64 block_bytes = mb * MB;
     int rounds = (int)params[1].value;
     if (rounds < 1) rounds = 1;
     if (rounds > MAX_ROUNDS) rounds = MAX_ROUNDS;
-    if (!prepare_result((u32)(block_bytes / ROWCONF_LINE))) return 0;
-    // One extra 2 MB so that the block can start on a 2 MB boundary
-    usize block_pages = (block_bytes + ALIGN) / 4096;
+    R.dist_step = ((u64)params[3].value + ROWCONF_LINE - 1) / ROWCONF_LINE * ROWCONF_LINE;
+    R.max_dist = (u64)params[2].value * 1024;
+    if (R.max_dist > block_bytes / 2) R.max_dist = block_bytes / 2;
+    if (R.max_dist < 4 * R.dist_step) R.max_dist = 4 * R.dist_step;
+    u32 lines = (u32)(block_bytes / ROWCONF_LINE);
+    if (!prepare_result(lines)) return 0;
+    usize block_pages = (usize)(2 * block_bytes / 4096), work_pages = ((usize)lines * 12 + 4095) / 4096;
     u8 *raw = alloc_pages(block_pages);
-    if (!raw) return 0;
-    u8 *block = (u8 *)(((u64)raw + ALIGN - 1) & ~(ALIGN - 1));
+    u32 *work = alloc_pages(work_pages);
+    if (!raw || !work) {
+        if (raw) BS->free_pages((efi_phys_addr)raw, block_pages);
+        if (work) BS->free_pages((efi_phys_addr)work, work_pages);
+        return 0;
+    }
+    u8 *block = (u8 *)(((u64)raw + block_bytes - 1) & ~(block_bytes - 1));
     memset(block, 1, block_bytes);
     R.base = (u64)block;
     R.rounds = rounds;
@@ -163,6 +321,7 @@ int rowconf_run(const exp_param *params) {
     memset(&R.estimate, 0, sizeof R.estimate);
     memset(&R.b.modes, 0, sizeof R.b.modes);
     u8 *fa = R.flags, *fb = R.flags + R.lines;
+    memset(R.flags, 0, 2 * (usize)R.lines);
     if (R.ref2) {
         measure_pass(block, R.ref2, &R.b, rounds);
         for (u32 i = 0; i < R.lines; i++) {
@@ -175,29 +334,30 @@ int rowconf_run(const exp_param *params) {
     }
     R.memory_bytes = memory_total_bytes();
     R.pages = R.estimate.row_bytes ? R.memory_bytes / R.estimate.row_bytes : 0;
+
+    u32 *order = work, *bank_of = work + lines, *scratch = work + 2 * (usize)lines;
+    R.kernel_banks = 0;
+    R.textbook = judge() == OK && build_order(order, bank_of, scratch);
+    if (!R.textbook) {
+        for (u32 i = 0; i < lines; i++) order[i] = i;
+    }
+    classic_graph(block, order);
     R.duration_us = now_us() - start;
     R.valid = 1;
     BS->free_pages((efi_phys_addr)raw, block_pages);
+    BS->free_pages((efi_phys_addr)work, work_pages);
     log_line("rowconf: low %.1f high %.1f threshold %.1f contrast %.1f peak %lu retried %lu; ref2 %u; "
-             "banks %u row %u B, %lu us",
+             "banks %u row %u B; kernel banks %u, textbook %d, prefetch off %d; T1 %lu T2 %lu; %lu us",
              R.a.modes.low, R.a.modes.high, R.a.modes.threshold, R.a.modes.contrast, R.a.modes.high_count,
-             R.a.retried, R.ref2 * ROWCONF_LINE, R.estimate.banks, R.estimate.row_bytes, R.duration_us);
+             R.a.retried, R.ref2 * ROWCONF_LINE, R.estimate.banks, R.estimate.row_bytes, R.kernel_banks, R.textbook,
+             R.prefetch_off, R.peaks.t1 < R.classic_n ? classic_dist[R.peaks.t1] : 0,
+             R.peaks.t2 < R.classic_n ? classic_dist[R.peaks.t2] : 0, R.duration_us);
     return 1;
 }
 
 // ==========================
 // ===  Verdict           ===
 // ==========================
-
-typedef enum { OK, NO_TIMES, NO_PEAK, NO_SECOND_PEAK, ODD_NUMBERS } verdict;
-
-static verdict judge(void) {
-    if (R.a.modes.low < 1) return NO_TIMES;
-    if (R.a.modes.high <= 0 || !R.ref2) return NO_PEAK;
-    if (R.b.modes.high <= 0) return NO_SECOND_PEAK;
-    if (R.estimate.banks < 2 || R.estimate.banks > 512 || R.estimate.row_bytes < 1024) return ODD_NUMBERS;
-    return OK;
-}
 
 static const char *const VERDICT_TEXT[] = {
     [OK] = "ok",
@@ -207,29 +367,50 @@ static const char *const VERDICT_TEXT[] = {
     [ODD_NUMBERS] = "odd_numbers",
 };
 
+// T1 and T2 by the formulas of the lab manual, then how the order was made
+static void draw_classic_verdict(i32 x, i32 y, i32 width) {
+    char line[400], t1[32], t2[32], page[32], pages[32], mem[32];
+    format_bytes(mem, sizeof mem, (double)R.memory_bytes);
+    i32 h;
+    if (!R.textbook) {
+        h = wrap_text(x, y, width, "Банки не разложены: классический график построен в физическом порядке линеек.",
+                      COL_PEACH);
+    } else if (R.peaks.t1 >= R.classic_n || !R.t2_page) {
+        fmt(line, sizeof line, "Пик T1 не найден: на кратных расстояниях время выше обычного меньше чем в %.1f раза.",
+            TEXTBOOK_T1_LEVEL);
+        h = wrap_text(x, y, width, line, COL_PEACH);
+    } else {
+        format_bytes(t1, sizeof t1, (double)classic_dist[R.peaks.t1]);
+        format_bytes(t2, sizeof t2, (double)classic_dist[R.peaks.t2]);
+        format_bytes(page, sizeof page, (double)R.t2_page);
+        format_count(pages, sizeof pages, R.t2_pages);
+        fmt(line, sizeof line, "T1 = %s, Б = T1 / линейка = %u.   T2 = %s, РС = T2 / Б = %s.   С = О / РС = %s при О = %s.",
+            t1, R.t1_banks, t2, page, pages, mem);
+        h = wrap_text(x, y, width, line, COL_TEXT);
+    }
+    if (R.textbook) {
+        fmt(line, sizeof line,
+            "Линейки в учебном порядке: labos нашёл %u банков по конфликтам строк и разложил линейки по кругу банков. "
+            "Без конфликта пара читается за %.0f нс, с конфликтом строк за %.0f нс.",
+            R.kernel_banks, R.a.modes.low, R.a.modes.high);
+        h += wrap_text(x, y + h + 2, width, line, COL_SUBTEXT) + 2;
+    }
+    wrap_text(x, y + h + 2, width,
+              R.prefetch_off ? "Аппаратная предвыборка выключена на время классического опыта."
+                             : "Аппаратная предвыборка осталась включённой: этот процессор не из известного списка.",
+              COL_SUBTEXT);
+}
+
 static void draw_verdict(i32 x, i32 y, i32 width) {
-    char line[320], mem[32], row[32], pages[32], same[32], lines[32];
-    i32 lh = gfx_line_height() + 6;
+    char line[320], row[32];
     const time_modes *m = &R.a.modes;
     switch (judge()) {
         case OK:
-            format_bytes(mem, sizeof mem, (double)R.memory_bytes);
-            format_bytes(row, sizeof row, R.estimate.row_bytes);
-            format_count(pages, sizeof pages, R.pages);
-            format_count(same, sizeof same, R.estimate.same_bank);
-            format_count(lines, sizeof lines, R.estimate.lines);
-            fmt(line, sizeof line, "Банков: %u     Строка (страница): %s     Страниц: %s     Память: %s",
-                R.estimate.banks, row, pages, mem);
-            gfx_text(x, y, line, COL_TEXT);
-            fmt(line, sizeof line,
-                "Без конфликта пара читается за %.0f нс, с конфликтом строк за %.0f нс. В банке опорной линейки "
-                "%s линеек из %s.",
-                m->low, m->high, same, lines);
-            wrap_text(x, y + lh, width, line, COL_SUBTEXT);
+            draw_classic_verdict(x, y, width);
             return;
         case NO_TIMES:
-            gfx_text(x, y, "Времена почти нулевые: у этой машины нет настоящей DRAM (виртуальная машина).", COL_RED);
-            return;
+            fmt(line, sizeof line, "Времена почти нулевые: у этой машины нет настоящей DRAM (виртуальная машина).");
+            break;
         case NO_PEAK:
             fmt(line, sizeof line,
                 "Пик конфликтов строк не найден. Основная полоса %.0f нс, выше неё нет отдельной группы времён: "
@@ -250,40 +431,50 @@ static void draw_verdict(i32 x, i32 y, i32 width) {
                 m->high, R.estimate.banks, row);
             break;
     }
-    wrap_text(x, y, width, line, COL_PEACH);
+    i32 used = wrap_text(x, y, width, line, COL_PEACH);
+    wrap_text(x, y + used + 2, width, "Поэтому классический график построен в физическом порядке линеек, как в PCLAB.",
+              COL_SUBTEXT);
 }
 
 // ==========================
 // ===  Screen            ===
 // ==========================
 
-static void draw_dots(i32 x, i32 y, i32 w, i32 h) {
-    double top = R.a.modes.high > 0 ? R.a.modes.high * 1.35 : R.a.modes.low * 2;
-    if (top <= 0) top = 1;
-    usize scratch_pages = ((usize)R.lines * 2 * sizeof(double) + 4095) / 4096;
-    double *xs = alloc_pages(scratch_pages);
-    if (!xs) return;
-    double *ys = xs + R.lines;
-    plot p = {.x = x, .y = y, .w = w, .h = h, .x0 = 0, .x1 = (double)R.lines * ROWCONF_LINE, .y0 = 0, .y1 = top,
-              .x_kind = AXIS_BYTES, .title = "Время пары чтений: опорная линейка и каждая линейка блока",
-              .x_label = "Расстояние от опорной линейки", .y_label = "нс", .legend_row = 1};
+// The classic graph up to n points: the whole range as dots, where T2 shows, or its start as a line,
+// where the peaks of T1 stand apart
+static void draw_classic(i32 x, i32 y, i32 w, i32 h, usize n, int whole) {
+    if (n < 2) return;
+    static double xs[CLASSIC_POINTS];
+    for (usize i = 0; i < n; i++) xs[i] = (double)classic_dist[i];
+    const char *title = whole ? (R.textbook ? "Время чтения блока: линейки в учебном порядке"
+                                            : "Время чтения блока: линейки в физическом порядке")
+                              : "Начало графика: пики T1";
+    plot p = {.x = x, .y = y, .w = w, .h = h, .x0 = 0, .x1 = xs[n - 1], .y0 = 0, .y1 = axis_top(classic_us, n),
+              .x_kind = AXIS_BYTES, .title = title, .x_label = whole ? 0 : "Расстояние между читаемыми ячейками",
+              .y_label = "мкс", .legend_row = whole};
     plot_frame(&p);
-    // Low band first, conflicts over it; times above the axis sit on its top edge
-    for (int pass = 0; pass < 2; pass++) {
-        usize n = 0;
-        for (u32 i = 1; i < R.lines; i++) {
-            int conflict = R.a.modes.high > 0 && R.a.ns[i] > R.a.modes.threshold;
-            if (conflict != pass) continue;
-            xs[n] = (double)i * ROWCONF_LINE;
-            ys[n++] = R.a.ns[i] < top ? R.a.ns[i] : top;
-        }
-        plot_dots(&p, xs, ys, n, pass ? COL_RED : COL_BLUE, pass ? 1.6 : 0.9);
+    int t1 = R.peaks.t1 < n, t2 = R.peaks.t2 < n;
+    if (t1) plot_vline(&p, xs[R.peaks.t1], COL_PEACH);
+    if (t2) plot_vline(&p, xs[R.peaks.t2], COL_RED);
+    if (whole) {
+        plot_dots(&p, xs, classic_us, n, COL_BLUE, 1.0);
+    } else {
+        plot_line(&p, xs, classic_us, n, COL_BLUE);
     }
-    if (R.a.modes.high > 0) plot_hline(&p, R.a.modes.threshold, COL_PEACH);
-    legend_item items[] = {{"другой банк или та же строка", COL_BLUE}, {"конфликт строк", COL_RED},
-                           {"порог", COL_PEACH}};
-    plot_legend(&p, items, R.a.modes.high > 0 ? 3 : 1);
-    BS->free_pages((efi_phys_addr)xs, scratch_pages);
+    if (!whole) return;
+    legend_item items[3] = {{"время чтения", COL_BLUE}};
+    usize k = 1;
+    if (R.peaks.t1 < R.classic_n) items[k++] = (legend_item){"T1", COL_PEACH};
+    if (t2) items[k++] = (legend_item){"T2", COL_RED};
+    plot_legend(&p, items, k);
+}
+
+// Points of the start of the graph: eight times T1, or 16 KB when T1 is not found
+static usize zoom_points(void) {
+    u64 upto = R.peaks.t1 < R.classic_n ? 8 * classic_dist[R.peaks.t1] : 16384;
+    usize n = 0;
+    while (n < R.classic_n && classic_dist[n] <= upto) n++;
+    return n;
 }
 
 static void draw_histogram(i32 x, i32 y, i32 w, i32 h) {
@@ -302,22 +493,24 @@ static void draw_histogram(i32 x, i32 y, i32 w, i32 h) {
         if (bins[b] > top) top = bins[b];
     }
     plot p = {.x = x, .y = y, .w = w, .h = h, .x0 = lo, .x1 = hi, .y0 = 0.8, .y1 = top * 2, .log_y = 1,
-              .title = "Сколько линеек с каждым временем", .x_label = "Время пары, нс",
+              .title = "Поиск банков: время пар", .x_label = "Время пары, нс",
               .y_label = "линеек", .legend_row = 1};
     plot_frame(&p);
     plot_bars(&p, left, width, low_counts, HIST_BINS, COL_BLUE);
     plot_bars(&p, left, width, high_counts, HIST_BINS, COL_RED);
     if (m->high > 0) plot_vline(&p, m->threshold, COL_PEACH);
-    legend_item items[] = {{"без конфликта", COL_BLUE}, {"конфликт строк", COL_RED}};
+    legend_item items[] = {{"обычные", COL_BLUE}, {"конфликт", COL_RED}};
     plot_legend(&p, items, m->high > 0 ? 2 : 1);
 }
 
 void rowconf_draw(i32 height) {
     gfx_fill(0, 0, screen.width, height, COL_OUTER);
     if (!R.valid) return;
-    i32 lh = gfx_line_height(), text_h = 3 * (lh + 6) + 16;
-    i32 graph_h = height - text_h, split = (i32)screen.width * 58 / 100;
-    draw_dots(0, 0, split, graph_h);
+    i32 lh = gfx_line_height(), text_h = 4 * (lh + 6) + 16;
+    i32 graph_h = height - text_h, split = (i32)screen.width * 66 / 100;
+    i32 top_h = graph_h * 58 / 100;
+    draw_classic(0, 0, split, top_h, R.classic_n, 1);
+    draw_classic(0, top_h, split, graph_h - top_h, zoom_points(), 0);
     draw_histogram(split, 0, (i32)screen.width - split, graph_h);
     draw_verdict(48, graph_h + 8, (i32)screen.width - 96);
 }
@@ -331,11 +524,23 @@ usize rowconf_report(u8 *out, usize cap) {
                   "low_ns %.2f\nhigh_ns %.2f\nthreshold_ns %.2f\ncontrast %.2f\npeak_lines %lu\nretried %lu\n"
                   "ref2_offset %u\nref2_low_ns %.2f\nref2_high_ns %.2f\nref2_contrast %.2f\n"
                   "banks %u\nrow_bytes %u\nsame_bank_lines %lu\nrow_lines %lu\nlines %lu\n"
-                  "memory_bytes %lu\npages %lu\nduration_us %lu\ntsc_ghz %.4f\ndata offset ns ns2\n",
+                  "memory_bytes %lu\npages %lu\nduration_us %lu\ntsc_ghz %.4f\n",
                   VERDICT_TEXT[judge()], R.base, (u64)R.lines * ROWCONF_LINE, R.rounds, a->low, a->high, a->threshold,
                   a->contrast, a->high_count, R.a.retried, R.ref2 * ROWCONF_LINE, b->low, b->high, b->contrast,
                   R.estimate.banks, R.estimate.row_bytes, R.estimate.same_bank, R.estimate.row_lines,
                   R.estimate.lines, R.memory_bytes, R.pages, R.duration_us, tsc_per_ns);
+    int t1 = R.peaks.t1 < R.classic_n, t2 = R.peaks.t2 < R.classic_n;
+    n += fmt(s + n, cap - n,
+             "order %s\nkernel_banks %u\nprefetch_off %d\nmax_distance_bytes %lu\ndistance_step_bytes %lu\n"
+             "t1_bytes %lu\nt1_level %.3f\nt2_bytes %lu\nfast_us %.3f\nbanks_t1 %u\npage_bytes_t2 %lu\npages_t2 %lu\n"
+             "classic distance_bytes time_us\n",
+             R.textbook ? "textbook" : "physical", R.kernel_banks, R.prefetch_off, R.max_dist, R.dist_step,
+             t1 ? classic_dist[R.peaks.t1] : 0, R.peaks.t1_level, t2 ? classic_dist[R.peaks.t2] : 0, R.peaks.fast,
+             R.t1_banks, R.t2_page, R.t2_pages);
+    for (usize i = 0; i < R.classic_n && n + 48 < cap; i++) {
+        n += fmt(s + n, cap - n, "%lu %.3f\n", classic_dist[i], classic_us[i]);
+    }
+    n += fmt(s + n, cap - n, "data offset ns ns2\n");
     for (u32 i = 0; i < R.lines && n + 48 < cap; i++) {
         n += fmt(s + n, cap - n, "%u %.1f %.1f\n", i * ROWCONF_LINE, R.a.ns[i], R.b.ns[i]);
     }
