@@ -1,5 +1,5 @@
 // Decoding speed of a labos film on the host: h264bsd plus the colour conversion of labos (src/film.c).
-// Usage: filmbench FILM.lfilm [first_frame.ppm]
+// Usage: filmbench FILM.lfilm [frame.ppm [frame number, 300 by default]]
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -26,7 +26,7 @@ int main(int argc, char **argv) {
     u32 header[5];
     memcpy(header, data + 8, sizeof header);
     u8 *stream = data + 28;
-    u32 left = (u32)(size - 28), frames = 0;
+    u32 left = (u32)(size - 28), frames = 0, dump = argc > 3 ? (u32)atoi(argv[3]) : 300;
     storage_t *dec = h264bsdAlloc();
     h264bsdInit(dec, 1);
     double start = now(), convert = 0;
@@ -45,7 +45,7 @@ int main(int argc, char **argv) {
             const u8 *u = pic + (size_t)stride * rows, *v = u + (size_t)(stride / 2) * (rows / 2);
             yuv420_to_rgb(pic, u, v, stride, header[0], header[1], bgra, header[0], header[0], header[1]);
             convert += now() - t0;
-            if (frames == 300 && argc > 2) {
+            if (frames == dump && argc > 2) {
                 FILE *ppm = fopen(argv[2], "wb");
                 u32 w = header[0], h = header[1];
                 fprintf(ppm, "P6\n%u %u\n255\n", w, h);

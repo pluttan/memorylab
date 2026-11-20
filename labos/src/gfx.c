@@ -8,12 +8,42 @@ surface screen;
 static efi_gop *gop;
 static int swap_rb;  // the frame buffer stores R in the low byte
 
+#define MODE_MAX_W 1920u  // larger screens would slow down every full screen redraw and the films
+#define MODE_MAX_H 1200u
+
+static int format_ok(const efi_gop_mode_info *m) {
+    return m->pixel_format == EFI_PIXEL_BGR_RESERVED_8BIT || m->pixel_format == EFI_PIXEL_RGB_RESERVED_8BIT;
+}
+
+// Firmware often starts an application in 800 x 600 or 1024 x 768 on a full HD monitor: then the films
+// do not fit and everything looks coarse. labos takes the largest mode up to 1920 x 1200
+static void pick_mode(void) {
+    const efi_gop_mode_info *cur = gop->mode->info;
+    u32 best = gop->mode->mode;
+    u64 best_area = format_ok(cur) && cur->horizontal_resolution <= MODE_MAX_W && cur->vertical_resolution <= MODE_MAX_H
+                        ? (u64)cur->horizontal_resolution * cur->vertical_resolution
+                        : 0;
+    for (u32 m = 0; m < gop->mode->max_mode; m++) {
+        usize size = 0;
+        efi_gop_mode_info *info = 0;
+        if (gop->query_mode(gop, m, &size, &info) != EFI_SUCCESS || !info) continue;
+        u32 w = info->horizontal_resolution, h = info->vertical_resolution;
+        log_line("gfx: mode %u is %ux%u, format %u", m, w, h, info->pixel_format);
+        u64 area = (u64)w * h;
+        if (format_ok(info) && w <= MODE_MAX_W && h <= MODE_MAX_H && area > best_area) best = m, best_area = area;
+        BS->free_pool(info);
+    }
+    if (best == gop->mode->mode) return;
+    if (gop->set_mode(gop, best) != EFI_SUCCESS) log_line("gfx: mode %u could not be set", best);
+}
+
 int gfx_init(void) {
     efi_guid guid = EFI_GOP_GUID;
     if (BS->locate_protocol(&guid, 0, (void **)&gop) != EFI_SUCCESS || !gop) {
         log_line("gfx: no graphics output protocol");
         return 0;
     }
+    pick_mode();
     efi_gop_mode_info *info = gop->mode->info;
     if (info->pixel_format != EFI_PIXEL_BGR_RESERVED_8BIT && info->pixel_format != EFI_PIXEL_RGB_RESERVED_8BIT) {
         log_line("gfx: pixel format %u is not supported", info->pixel_format);

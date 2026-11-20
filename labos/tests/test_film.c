@@ -78,20 +78,41 @@ static void test_colour(void) {
     }
 }
 
-static void test_scale(void) {
-    // 4x2 to 2x1: every destination pixel takes the source pixel at x * 2
+static int grey(u32 rgb, int lo, int hi) {
+    int r = (int)(rgb >> 16 & 255), g = (int)(rgb >> 8 & 255), b = (int)(rgb & 255);
+    return r >= lo && r <= hi && g >= lo && g <= hi && b >= lo && b <= hi;
+}
+
+static void test_shrink(void) {
+    // 4x2 to 2x1: every pixel averages the two columns it covers, the stripes turn grey
     u8 y[8] = {16, 235, 16, 235, 16, 235, 16, 235}, u[2] = {128, 128}, v[2] = {128, 128};
-    u32 out[2];
+    u32 out[4];
     yuv420_to_rgb(y, u, v, 4, 4, 2, out, 2, 2, 1);
-    CHECK(out[0] == 0x000000 && out[1] == 0x000000);
+    CHECK(grey(out[0], 120, 136) && grey(out[1], 120, 136));
+    // 3 columns to 2: the first pixel covers the white column alone, the second averages two
     yuv420_to_rgb(y + 1, u, v, 4, 3, 2, out, 2, 2, 1);
-    CHECK(out[0] == 0xffffff);
+    CHECK(out[0] == 0xffffff && grey(out[1], 120, 136));
+    // A one pixel line in 5 columns shrunk to 4 stays visible
+    u8 line[10] = {16, 16, 235, 16, 16, 16, 16, 235, 16, 16};
+    yuv420_to_rgb(line, u, v, 5, 5, 2, out, 4, 4, 1);
+    u32 brightest = 0;
+    for (int i = 0; i < 4; i++) brightest = (out[i] & 255) > brightest ? (out[i] & 255) : brightest;
+    CHECK(brightest > 100);
+}
+
+static void test_same_size(void) {
+    // Without scaling every pixel keeps its own luma
+    u8 y[8] = {16, 235, 16, 235, 16, 235, 16, 235}, u[2] = {128, 128}, v[2] = {128, 128};
+    u32 out[8];
+    yuv420_to_rgb(y, u, v, 4, 4, 2, out, 4, 4, 2);
+    CHECK(out[0] == 0x000000 && out[1] == 0xffffff && out[7] == 0xffffff);
 }
 
 int main(void) {
     test_parse_and_index();
     test_colour();
-    test_scale();
+    test_shrink();
+    test_same_size();
     printf(failures ? "%d failures\n" : "ok\n", failures);
     return failures != 0;
 }
