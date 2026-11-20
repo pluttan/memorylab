@@ -17,6 +17,9 @@
 
 static struct {
     double xs[MAX_LINES], conflict_ns[MAX_LINES], free_ns[MAX_LINES];
+    // As in the manual: the offset of the last line read, a * bank and a * (bank + line)
+    double conflict_off[MAX_LINES], free_off[MAX_LINES];
+    double threshold_off;
     usize points;
     u64 bank, line;
     double threshold;  // the smallest number of lines with conflicts, or 0
@@ -63,14 +66,16 @@ int conflicts_run(const exp_param *params) {
     for (u32 n = 1; n <= max_lines; n++) {
         progress(n - 1, max_lines);
         K.xs[K.points] = n;
+        K.conflict_off[K.points] = (double)(n - 1) * (double)K.bank;
+        K.free_off[K.points] = (double)(n - 1) * (double)(K.bank + K.line);
         K.conflict_ns[K.points] = chase_ns(base, K.bank, n);
         K.free_ns[K.points] = chase_ns(base, K.bank + K.line, n);
         K.points++;
     }
     BS->free_pages((efi_phys_addr)base, pages);
-    K.threshold = 0;
+    K.threshold = 0, K.threshold_off = 0;
     for (usize i = 0; i < K.points && !K.threshold; i++) {
-        if (K.conflict_ns[i] > JUMP * K.free_ns[i]) K.threshold = K.xs[i];
+        if (K.conflict_ns[i] > JUMP * K.free_ns[i]) K.threshold = K.xs[i], K.threshold_off = K.conflict_off[i];
     }
     double last_free = K.free_ns[K.points - 1];
     K.ratio = last_free > 0 ? K.conflict_ns[K.points - 1] / last_free : 0;
@@ -83,27 +88,30 @@ int conflicts_run(const exp_param *params) {
 void conflicts_draw(i32 height) {
     gfx_fill(0, 0, screen.width, height, COL_OUTER);
     if (!K.valid) return;
-    static char c0[200], c1[220], c2[200];
+    static char c0[200], c1[260], c2[200];
     char bank[32];
     format_bytes(bank, sizeof bank, (double)K.bank);
     fmt(c0, sizeof c0, "При %d линейках чтение с конфликтами шло в %.2f раза дольше, чем без конфликтов.",
         (int)K.xs[K.points - 1], K.ratio);
     if (K.threshold > 0) {
-        fmt(c1, sizeof c1, "Чтение с шагом банка стало в %.1f раза дольше с %d линеек: они перестали помещаться в "
-                           "один набор.", JUMP, (int)K.threshold);
+        char at[32];
+        format_bytes(at, sizeof at, K.threshold_off);
+        fmt(c1, sizeof c1, "Чтение с шагом банка стало в %.1f раза дольше со смещения %s, то есть с %d линеек: они "
+                           "перестали помещаться в один набор.", JUMP, at, (int)K.threshold);
     } else {
         fmt(c1, sizeof c1, "Чтение с шагом банка ни разу не стало в %.1f раза дольше. Проверьте размер банка: "
                            "объём L1 делить на число путей.", JUMP);
     }
     fmt(c2, sizeof c2, "Шаг с конфликтами %s, без конфликтов на %lu Б больше. Время обращения: наименьшее из %d.",
         bank, K.line, REPEATS);
-    series lines[] = {{"С конфликтами", COL_RED, K.xs, K.conflict_ns, K.points},
-                      {"Без конфликтов", COL_GREEN, K.xs, K.free_ns, K.points}};
-    expscreen s = {.graph = {.x0 = 1, .x1 = K.points > 1 ? K.xs[K.points - 1] : 2, .y0 = 0,
-                             .y1 = axis_top(K.conflict_ns, K.points),
+    series lines[] = {{"С конфликтами", COL_RED, K.conflict_off, K.conflict_ns, K.points},
+                      {"Без конфликтов", COL_GREEN, K.free_off, K.free_ns, K.points}};
+    double right = K.free_off[K.points - 1];
+    expscreen s = {.graph = {.x0 = 0, .x1 = right > 0 ? right : (double)K.bank, .y0 = 0,
+                             .y1 = axis_top(K.conflict_ns, K.points), .x_kind = AXIS_BYTES,
                              .title = "Исследование конфликтов в кэш-памяти",
-                             .x_label = "Число линеек", .y_label = "нс"},
-                   .lines = lines, .nlines = 2, .marks = &K.threshold, .nmarks = K.threshold > 0,
+                             .x_label = "Смещение читаемой ячейки от начала блока", .y_label = "нс"},
+                   .lines = lines, .nlines = 2, .marks = &K.threshold_off, .nmarks = K.threshold > 0,
                    .mark_name = "Начало конфликтов", .conclusions = {c0, c1, c2}};
     expscreen_draw(&s, height);
 }
@@ -112,10 +120,12 @@ usize conflicts_report(u8 *out, usize cap) {
     char *s = (char *)out;
     if (!K.valid) return fmt(s, cap, "error: experiment 5 has not run yet");
     usize n = fmt(s, cap, "experiment cache_conflicts\nbank_bytes %lu\nline_bytes %lu\nconflict_threshold_lines %d\n"
-                          "conflict_to_no_conflict_ratio %.3f\ntsc_ghz %.4f\ndata lines conflict_ns no_conflict_ns\n",
+                          "conflict_to_no_conflict_ratio %.3f\ntsc_ghz %.4f\n"
+                          "data lines offset_conflict offset_no_conflict conflict_ns no_conflict_ns\n",
                   K.bank, K.line, (int)K.threshold, K.ratio, tsc_per_ns);
     for (usize i = 0; i < K.points && n + 64 < cap; i++) {
-        n += fmt(s + n, cap - n, "%d %.2f %.2f\n", (int)K.xs[i], K.conflict_ns[i], K.free_ns[i]);
+        n += fmt(s + n, cap - n, "%d %lu %lu %.2f %.2f\n", (int)K.xs[i], (u64)K.conflict_off[i], (u64)K.free_off[i],
+                 K.conflict_ns[i], K.free_ns[i]);
     }
     return n;
 }

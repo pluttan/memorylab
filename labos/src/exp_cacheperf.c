@@ -17,7 +17,7 @@
 #define MIN_BYTES (32ull << 20)  // bytes processed in one measurement
 
 static const char *const MODE_NAME[MODES] = {"Чтение", "Запись", "Чтение и запись", "Запись и чтение"};
-static const u32 MODE_COLOR[MODES] = {COL_BLUE, COL_RED, COL_GREEN, COL_PEACH};
+static const u32 MODE_COLOR[MODES] = {COL_RED, COL_GREEN, COL_MAUVE, COL_BLUE};  // as in the manual
 
 static struct {
     u64 sizes[MAX_POINTS];

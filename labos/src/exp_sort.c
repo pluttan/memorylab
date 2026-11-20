@@ -12,7 +12,7 @@
 #define ALGORITHMS 3
 
 static const char *const NAME[ALGORITHMS] = {"QuickSort", "Radix-Counting Sort", "Radix-Counting Sort, оптимизированный"};
-static const u32 COLOR[ALGORITHMS] = {COL_RED, COL_BLUE, COL_GREEN};
+static const u32 COLOR[ALGORITHMS] = {COL_MAUVE, COL_RED, COL_GREEN};  // as in the manual
 
 static struct {
     double xs[MAX_POINTS], ms[ALGORITHMS][MAX_POINTS];
